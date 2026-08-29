@@ -112,6 +112,11 @@ void getAuthTokenFromNVS() {
 }
 
 void setupWiFi() {
+#if defined(ELATO_CARDPUTER)
+  // A handheld setup flow needs enough time to switch networks and complete
+  // the captive-portal form without the AP cycling underneath the browser.
+  WifiManager.setSoftApTimeout(10 * 60 * 1000UL);
+#endif
   WifiManager.startBackgroundTask(
       "ELATO-DEVICE"); // Run the background task to take care of our Wifi
   WifiManager.fallbackToSoftAp(

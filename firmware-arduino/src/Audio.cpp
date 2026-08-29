@@ -444,7 +444,11 @@ void websocketSetup(const String& server_domain, int port, const String& path)
 
     webSocket.setExtraHeaders(headers.c_str());
     webSocket.onEvent(webSocketEvent);
+#if defined(ELATO_CARDPUTER)
+    webSocket.setReconnectInterval(5000);
+#else
     webSocket.setReconnectInterval(1000);
+#endif
     webSocket.disableHeartbeat();
 
     // webSocket.enableHeartbeat(30000, 15000, 3); // 30s ping interval, 15s timeout, 3 retries

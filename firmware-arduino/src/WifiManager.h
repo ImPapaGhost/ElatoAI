@@ -82,6 +82,9 @@ class WIFIMANAGER {
     // If no known Wifi can't be found, create an AP but retry regulary
     void fallbackToSoftAp(bool state = true);
 
+    // Set how long an unattended configuration portal remains available.
+    void setSoftApTimeout(uint32_t timeoutMillis) { timeoutApMillis = timeoutMillis; }
+
     // Get the current fallback state
     bool getFallbackState() const;
 

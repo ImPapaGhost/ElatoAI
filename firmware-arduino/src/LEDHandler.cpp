@@ -113,6 +113,7 @@ void ledTask(void *parameter)
     (void)parameter;
     DeviceState lastState = static_cast<DeviceState>(-1);
     unsigned long lastRefresh = 0;
+    unsigned long authResetStarted = 0;
 
     while (1)
     {
@@ -120,6 +121,34 @@ void ledTask(void *parameter)
         if (M5Cardputer.BtnA.wasHold())
         {
             sleepRequested = true;
+        }
+
+        const auto &keys = M5Cardputer.Keyboard.keysState();
+        if (keys.fn && keys.backspace)
+        {
+            if (authResetStarted == 0)
+            {
+                authResetStarted = millis();
+            }
+            else if (millis() - authResetStarted >= 2000)
+            {
+                resetAuth();
+                M5Cardputer.Display.fillScreen(TFT_BLACK);
+                M5Cardputer.Display.setTextDatum(middle_center);
+                M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+                M5Cardputer.Display.drawString("Account token cleared",
+                                                M5Cardputer.Display.width() / 2,
+                                                M5Cardputer.Display.height() / 2 - 8);
+                M5Cardputer.Display.drawString("Restarting...",
+                                                M5Cardputer.Display.width() / 2,
+                                                M5Cardputer.Display.height() / 2 + 8);
+                delay(500);
+                ESP.restart();
+            }
+        }
+        else
+        {
+            authResetStarted = 0;
         }
 
         const DeviceState currentState = deviceState;

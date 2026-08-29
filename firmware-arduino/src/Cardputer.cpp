@@ -8,6 +8,14 @@ namespace {
 
 SemaphoreHandle_t cardputerAudioMutex = nullptr;
 
+enum class CardputerAudioMode : uint8_t {
+  Idle,
+  Microphone,
+  Speaker,
+};
+
+CardputerAudioMode cardputerAudioMode = CardputerAudioMode::Idle;
+
 class AudioLock {
 public:
   AudioLock() {
@@ -134,8 +142,7 @@ void setupCardputerHardware() {
   // Software volume remains controlled by ElatoAI's VolumeStream. Keeping the
   // hardware mixer at full scale preserves the existing 0-100 volume behavior.
   M5Cardputer.Speaker.setVolume(255);
-  M5Cardputer.Mic.end();
-  M5Cardputer.Speaker.end();
+  cardputerAudioMode = CardputerAudioMode::Idle;
 
   Serial.printf("Detected M5 board: %d\n", static_cast<int>(M5.getBoard()));
 }
@@ -143,33 +150,48 @@ void setupCardputerHardware() {
 void cardputerEnterSpeakerMode() {
   AudioLock lock;
 
-  waitForMicrophone();
-  M5Cardputer.Mic.end();
+  if (cardputerAudioMode == CardputerAudioMode::Microphone ||
+      M5Cardputer.Mic.isRunning()) {
+    waitForMicrophone();
+    M5Cardputer.Mic.end();
+  }
   cardputerSpeakerOutput.clearBuffer();
-  M5Cardputer.Speaker.stop(0);
 
   if (!M5Cardputer.Speaker.isRunning() && !M5Cardputer.Speaker.begin()) {
     Serial.println("Unable to start the Cardputer speaker");
+    cardputerAudioMode = CardputerAudioMode::Idle;
+    return;
   }
+  cardputerAudioMode = CardputerAudioMode::Speaker;
 }
 
 void cardputerEnterMicrophoneMode() {
-  cardputerSpeakerOutput.discardAudio();
-
   AudioLock lock;
-  M5Cardputer.Speaker.end();
+  if (cardputerAudioMode == CardputerAudioMode::Speaker ||
+      M5Cardputer.Speaker.isRunning()) {
+    cardputerSpeakerOutput.clearBuffer();
+    M5Cardputer.Speaker.stop(0);
+    M5Cardputer.Speaker.end();
+  }
   if (!M5Cardputer.Mic.isRunning() && !M5Cardputer.Mic.begin()) {
     Serial.println("Unable to start the Cardputer microphone");
+    cardputerAudioMode = CardputerAudioMode::Idle;
+    return;
   }
+  cardputerAudioMode = CardputerAudioMode::Microphone;
 }
 
 void stopCardputerAudio() {
-  cardputerSpeakerOutput.discardAudio();
-
   AudioLock lock;
-  waitForMicrophone();
-  M5Cardputer.Mic.end();
-  M5Cardputer.Speaker.end();
+  if (cardputerAudioMode == CardputerAudioMode::Microphone) {
+    waitForMicrophone();
+    M5Cardputer.Mic.end();
+  } else if (cardputerAudioMode == CardputerAudioMode::Speaker) {
+    cardputerSpeakerOutput.clearBuffer();
+    M5Cardputer.Speaker.stop(0);
+    M5Cardputer.Speaker.end();
+  }
+  cardputerAudioMode = CardputerAudioMode::Idle;
 }
 
 bool readCardputerMicrophone(int16_t *samples, size_t sampleCount) {
@@ -178,7 +200,8 @@ bool readCardputerMicrophone(int16_t *samples, size_t sampleCount) {
   }
 
   AudioLock lock;
-  if (deviceState != LISTENING) {
+  if (deviceState != LISTENING ||
+      cardputerAudioMode != CardputerAudioMode::Microphone) {
     return false;
   }
 

@@ -71,6 +71,11 @@ the upload command.
 
 Hold the G0 button to enter deep sleep. Press G0 again to wake the device.
 
+If a previously stored ElatoAI account token is stale or the device is moved to
+a different account, hold **Fn + Backspace** for two seconds. The Cardputer
+clears only the account token, restarts, and securely requests a fresh token for
+its registered MAC address. Saved Wi-Fi networks are preserved.
+
 ## Voice server configuration
 
 The defaults in `src/Config.h` use `ELATO_MODE` and ElatoAI's hosted voice
