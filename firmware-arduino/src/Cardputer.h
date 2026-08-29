@@ -17,6 +17,7 @@ public:
   void flushAudio();
   void discardAudio();
   void clearBuffer();
+  bool isPlaybackPending();
 
 private:
   static constexpr size_t BUFFER_SAMPLES = 960; // 20 ms at 48 kHz
@@ -27,13 +28,15 @@ private:
   alignas(int16_t) uint8_t buffers_[3][BUFFER_BYTES] = {};
   size_t bufferIndex_ = 0;
   size_t bufferedBytes_ = 0;
+  size_t submittedBlocks_ = 0;
+  bool faulted_ = false;
 };
 
 extern CardputerSpeakerOutput cardputerSpeakerOutput;
 
 void setupCardputerHardware();
-void cardputerEnterSpeakerMode();
-void cardputerEnterMicrophoneMode();
+bool cardputerEnterSpeakerMode();
+bool cardputerEnterMicrophoneMode();
 void stopCardputerAudio();
 bool readCardputerMicrophone(int16_t *samples, size_t sampleCount);
 void prepareCardputerForSleep();

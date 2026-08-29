@@ -14,16 +14,32 @@ extern TaskHandle_t networkTaskHandle;
 
 extern volatile bool scheduleListeningRestart;
 extern unsigned long scheduledTime;
-extern unsigned long speakingStartTime;
+extern volatile unsigned long speakingStartTime;
+extern volatile unsigned long lastResponseActivityTime;
 
 extern int currentVolume;
 extern const int CHANNELS;         // Mono
 extern const int BITS_PER_SAMPLE; // 16-bit audio
 
 // AUDIO OUTPUT
-constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 10;     // total bytes in the buffer
+#if defined(ELATO_CARDPUTER)
+// A maximum-duration Opus frame expands to 11,520 bytes of mono s16 PCM at
+// 48 kHz. The decoder emits it in 512-byte writes, and 12 KiB keeps one full
+// frame buffered without competing with libopus's large scratch workspace.
+constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 12;
+#else
+constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 10;
+#endif
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
-extern OpusAudioDecoder opusDecoder;
+
+class ResettableOpusAudioDecoder : public OpusAudioDecoder {
+public:
+    bool resetState() {
+        return dec != nullptr && opus_decoder_ctl(dec, OPUS_RESET_STATE) == OPUS_OK;
+    }
+};
+
+extern ResettableOpusAudioDecoder opusDecoder;
 extern BufferRTOS<uint8_t> audioBuffer;
 #if !defined(ELATO_CARDPUTER)
 extern I2SStream i2s; 
@@ -53,6 +69,7 @@ void networkTask(void *parameter);
 
 // AUDIO OUTPUT
 unsigned long getSpeakingDuration();
+unsigned long getResponseInactivityDuration();
 void audioStreamTask(void *parameter);
 
 // AUDIO INPUT

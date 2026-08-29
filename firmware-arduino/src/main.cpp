@@ -226,9 +226,13 @@ void setup() {
 #if defined(ELATO_CARDPUTER)
   constexpr uint32_t indicatorTaskStack = 6144;
   constexpr UBaseType_t indicatorTaskPriority = 1;
+  // Cardputer builds compile libopus with VAR_ARRAYS, so SILK scratch storage
+  // lives on this task stack instead of a failure-prone 120 KB heap block.
+  constexpr uint32_t networkTaskStack = 32768;
 #else
   constexpr uint32_t indicatorTaskStack = 4096;
   constexpr UBaseType_t indicatorTaskPriority = 5;
+  constexpr uint32_t networkTaskStack = 8192;
 #endif
 
   // Pin the UI/LED and audio tasks to Core 1 (application core). Cardputer's
@@ -264,7 +268,7 @@ void setup() {
   // Pin network task to Core 0 (protocol core)
   xTaskCreatePinnedToCore(networkTask,              // Function
                           "Websocket Task",         // Name
-                          8192,                     // Stack size
+                          networkTaskStack,          // Stack size
                           NULL,                     // Parameters
                           configMAX_PRIORITIES - 1, // Highest priority
                           &networkTaskHandle,       // Handle
@@ -277,6 +281,16 @@ void setup() {
 
 void loop() {
   processSleepRequest();
+#if defined(ELATO_CARDPUTER)
+  // Recover only when the stream has stopped making progress. Long replies
+  // may legitimately exceed a minute, so total speaking time is not a useful
+  // failure signal. RESPONSE.COMPLETE disarms this timer immediately.
+  if (deviceState == SPEAKING && getSpeakingDuration() > 5000 &&
+      getResponseInactivityDuration() > 45000) {
+    Serial.println("Voice stream inactive; restarting audio session");
+    ESP.restart();
+  }
+#endif
   if (otaState == OTA_IN_PROGRESS) {
     loopOTA();
   }

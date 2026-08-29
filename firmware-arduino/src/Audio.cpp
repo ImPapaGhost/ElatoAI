@@ -15,7 +15,15 @@ TaskHandle_t networkTaskHandle = NULL;
 // TIMING REGISTERS
 volatile bool scheduleListeningRestart = false;
 unsigned long scheduledTime = 0;
-unsigned long speakingStartTime = 0;
+volatile unsigned long speakingStartTime = 0;
+volatile unsigned long lastResponseActivityTime = 0;
+
+#if defined(ELATO_CARDPUTER)
+unsigned long responseDrainDeadline = 0;
+uint32_t responseOpusPackets = 0;
+uint32_t responseOpusBytes = 0;
+uint32_t responsePcmBytes = 0;
+#endif
 
 // AUDIO SETTINGS
 int currentVolume = 70;
@@ -31,7 +39,11 @@ public:
   // networkTask -> webSocket.loop() -> webSocketEvent(WStype_BIN, ...) -> opusDecoder.write() -> bufferPrint.write()
   virtual size_t write(uint8_t data) override {
     if (webSocket.isConnected() && deviceState == SPEAKING) {
-        return _buffer.writeArray(&data, 1);
+        const size_t written = _buffer.writeArray(&data, 1);
+#if defined(ELATO_CARDPUTER)
+        responsePcmBytes += written;
+#endif
+        return written;
     }
     return 1; //let opusDecoder write, otherwise thread will stuck
   }
@@ -39,7 +51,11 @@ public:
   // networkTask -> webSocket.loop() -> webSocketEvent(WStype_BIN, ...) -> opusDecoder.write() -> bufferPrint.write()
   virtual size_t write(const uint8_t *buffer, size_t size) override {
     if (webSocket.isConnected() && deviceState == SPEAKING) {
-        return _buffer.writeArray(buffer, size);
+        const size_t written = _buffer.writeArray(buffer, size);
+#if defined(ELATO_CARDPUTER)
+        responsePcmBytes += written;
+#endif
+        return written;
     }
     return size; //let opusDecoder write, otherwise thread will stuck
   }
@@ -49,7 +65,7 @@ private:
 };
 
 BufferPrint bufferPrint(audioBuffer);
-OpusAudioDecoder opusDecoder;  //access guarded by wsmutex
+ResettableOpusAudioDecoder opusDecoder;  //access guarded by wsmutex
 BufferRTOS<uint8_t> audioBuffer(AUDIO_BUFFER_SIZE, AUDIO_CHUNK_SIZE);  //producer: networkTask, consumer: audioStreamTask. Thread safe in single producer->single consumer scenario.
 QueueStream<uint8_t> queue(audioBuffer); //access from audioStreamTask only
 
@@ -72,27 +88,48 @@ AudioInfo info(SAMPLE_RATE, CHANNELS, BITS_PER_SAMPLE);
 volatile bool i2sOutputFlushScheduled = false;
 
 unsigned long getSpeakingDuration() {
-    if (deviceState == SPEAKING && speakingStartTime > 0) {
-        return millis() - speakingStartTime;
+    const unsigned long started = speakingStartTime;
+    const unsigned long now = millis();
+    if (deviceState == SPEAKING && started > 0 &&
+        static_cast<int32_t>(now - started) >= 0) {
+        return now - started;
+    }
+    return 0;
+}
+
+unsigned long getResponseInactivityDuration() {
+    const unsigned long lastActivity = lastResponseActivityTime;
+    const unsigned long now = millis();
+    if (deviceState == SPEAKING && lastActivity > 0 &&
+        static_cast<int32_t>(now - lastActivity) >= 0) {
+        return now - lastActivity;
     }
     return 0;
 }
 
 // networkTask -> webSocket.loop() -> webSocketEvent(WStype_TEXT, ...) -> transitionToSpeaking()
 void transitionToSpeaking() {
+    // Clear a prior turn before yielding. A late RESPONSE.CREATED can otherwise
+    // leave the watchdog observing the previous SPEAKING timestamp during this
+    // handoff delay.
+    deviceState = PROCESSING;
+    speakingStartTime = 0;
     vTaskDelay(50);
 
-    deviceState = PROCESSING;
     i2sInputFlushScheduled = true;
 
 #if defined(ELATO_CARDPUTER)
-    cardputerEnterSpeakerMode();
+    if (!cardputerEnterSpeakerMode()) {
+        deviceState = WAITING;
+        return;
+    }
 #else
     digitalWrite(I2S_SD_OUT, HIGH);
 #endif
 
-    deviceState = SPEAKING;
     speakingStartTime = millis();
+    lastResponseActivityTime = speakingStartTime;
+    deviceState = SPEAKING;
     
     // webSocket.enableHeartbeat(30000, 15000, 3);
     
@@ -102,6 +139,13 @@ void transitionToSpeaking() {
 // networkTask -> transitionToListening()
 // ( networkTask -> webSocket.loop() -> webSocketEvent(WStype_TEXT, ...) -> (sets scheduleListeningRestart) -> networkTask -> transitionToListening() )
 void transitionToListening() {
+    if (!webSocket.isConnected()) {
+        scheduleListeningRestart = false;
+        deviceState = IDLE;
+        Serial.println("Cannot enter listening mode without a websocket connection");
+        return;
+    }
+
     deviceState = PROCESSING;   
     scheduleListeningRestart = false;
     Serial.println("Transitioning to listening mode");
@@ -110,7 +154,10 @@ void transitionToListening() {
     i2sOutputFlushScheduled = true;
 
 #if defined(ELATO_CARDPUTER)
-    cardputerEnterMicrophoneMode();
+    if (!cardputerEnterMicrophoneMode()) {
+        deviceState = WAITING;
+        return;
+    }
 #else
     digitalWrite(I2S_SD_OUT, LOW);
 #endif
@@ -118,6 +165,8 @@ void transitionToListening() {
     Serial.println("Transitioned to listening mode");
 
     deviceState = LISTENING;
+    speakingStartTime = 0;
+    lastResponseActivityTime = 0;
     // webSocket.disableHeartbeat();
 }
 
@@ -135,7 +184,7 @@ void audioStreamTask(void *parameter) {
     cfg.bits_per_sample = BITS_PER_SAMPLE;
     // A 120ms Opus frame decoded at 48kHz mono s16 is 11520 bytes; 6144 only
     // fit the old 24kHz pipeline.
-    cfg.max_buffer_size = 16384;
+    cfg.max_buffer_size = 12288;
 
     xSemaphoreTake(wsMutex, portMAX_DELAY);
     opusDecoder.setOutput(bufferPrint);
@@ -190,11 +239,6 @@ void audioStreamTask(void *parameter) {
             } else {
                 copier.copy();
             }
-#if defined(ELATO_CARDPUTER)
-            // StreamCopy can leave a short final block in the adapter. Queue it
-            // immediately so sentence endings are not stranded in RAM.
-            cardputerSpeakerOutput.flushAudio();
-#endif
         }
         else {
             //we should always read from audioBuffer, otherwise writing thread can stuck
@@ -316,8 +360,12 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     {
     case WStype_DISCONNECTED:
         Serial.printf("[WSc] Disconnected!\n");
+        scheduleListeningRestart = false;
+        speakingStartTime = 0;
+        lastResponseActivityTime = 0;
         deviceState = IDLE;
 #if defined(ELATO_CARDPUTER)
+        responseDrainDeadline = 0;
         i2sInputFlushScheduled = true;
         i2sOutputFlushScheduled = true;
         stopCardputerAudio();
@@ -325,7 +373,10 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);
-        deviceState = PROCESSING;
+        opusDecoder.resetState();
+        speakingStartTime = 0;
+        lastResponseActivityTime = 0;
+        deviceState = WAITING;
         break;
     case WStype_TEXT:
     {
@@ -345,6 +396,7 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 
         // auth messages
         if (strcmp((char*)type.c_str(), "auth") == 0) {
+            deviceState = WAITING;
             currentVolume = doc["volume_control"].as<int>();
             currentPitchFactor = doc["pitch_factor"].as<float>();
 
@@ -382,21 +434,51 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             String msg = doc["msg"];
             Serial.println(msg);
 
-            if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0 || strcmp((char*)msg.c_str(), "RESPONSE.ERROR") == 0) {
-                Serial.println("Received RESPONSE.COMPLETE or RESPONSE.ERROR, starting listening again");
+            if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0) {
+                Serial.println("Received RESPONSE.COMPLETE, draining speaker audio");
+
+                // Disarm the speaking watchdog immediately. A completion that
+                // arrives at the timeout boundary must win over recovery.
+                speakingStartTime = 0;
+                lastResponseActivityTime = 0;
+#if defined(ELATO_CARDPUTER)
+                Serial.printf("Response audio: %u Opus packets / %u bytes -> %u PCM bytes\n",
+                              responseOpusPackets, responseOpusBytes,
+                              responsePcmBytes);
+#endif
 
                 // Check if volume_control is included in the message
-                if (doc.containsKey("volume_control")) {
+                if (doc["volume_control"].is<int>()) {
                     int newVolume = doc["volume_control"].as<int>();
                     volume.setVolume(newVolume / 100.0f);
                 }
 
                 scheduleListeningRestart = true;
-                scheduledTime = millis() + 1000; // 1 second delay
+                scheduledTime = millis() + 20;
+#if defined(ELATO_CARDPUTER)
+                // A bounded drain avoids clipping queued speech while still
+                // recovering if the M5 speaker task itself stops advancing.
+                responseDrainDeadline = millis() + 10000;
+#endif
+            } else if (strcmp((char*)msg.c_str(), "RESPONSE.ERROR") == 0) {
+                Serial.println("Voice server reported RESPONSE.ERROR");
+                scheduleListeningRestart = false;
+                speakingStartTime = 0;
+                lastResponseActivityTime = 0;
+                i2sInputFlushScheduled = true;
+                i2sOutputFlushScheduled = true;
+                deviceState = WAITING;
             } else if (strcmp((char*)msg.c_str(), "AUDIO.COMMITTED") == 0) {
                 deviceState = PROCESSING; 
             } else if (strcmp((char*)msg.c_str(), "RESPONSE.CREATED") == 0) {
                 Serial.println("Received RESPONSE.CREATED, transitioning to speaking");
+#if defined(ELATO_CARDPUTER)
+                responseOpusPackets = 0;
+                responseOpusBytes = 0;
+                responsePcmBytes = 0;
+                responseDrainDeadline = 0;
+#endif
+                opusDecoder.resetState();
                 transitionToSpeaking();
             } else if (strcmp((char*)msg.c_str(), "SESSION.END") == 0) {
                 Serial.println("Received SESSION.END, going to sleep");
@@ -413,6 +495,19 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         }
 
         // Otherwise process the audio data normally
+        const int packetSamples =
+            opus_packet_get_nb_samples(payload, length, SAMPLE_RATE);
+        if (length == 0 || length > 1275 || packetSamples <= 0 ||
+            packetSamples > 5760) {
+            Serial.printf("Dropping invalid Opus packet (%u bytes, samples=%d)\n",
+                          length, packetSamples);
+            break;
+        }
+#if defined(ELATO_CARDPUTER)
+        ++responseOpusPackets;
+        responseOpusBytes += length;
+#endif
+        lastResponseActivityTime = millis();
         size_t processed = opusDecoder.write(payload, length);
         if (processed != length) {
             Serial.printf("Warning: Only processed %d/%d bytes\n", processed, length);
@@ -469,7 +564,26 @@ void networkTask(void *parameter) {
 
         // Check to see if a transition to listening mode is scheduled.
         if (scheduleListeningRestart && millis() >= scheduledTime) {
+#if defined(ELATO_CARDPUTER)
+            bool playbackDrained = audioBuffer.isEmpty();
+            if (playbackDrained) {
+                cardputerSpeakerOutput.flushAudio();
+                playbackDrained = !cardputerSpeakerOutput.isPlaybackPending();
+            }
+
+            const bool drainTimedOut =
+                static_cast<int32_t>(millis() - responseDrainDeadline) >= 0;
+            if (playbackDrained || drainTimedOut) {
+                if (drainTimedOut && !playbackDrained) {
+                    Serial.println("Cardputer speaker drain timed out");
+                }
+                transitionToListening();
+            } else {
+                scheduledTime = millis() + 20;
+            }
+#else
             transitionToListening();
+#endif
         }
 
         webSocket.loop();

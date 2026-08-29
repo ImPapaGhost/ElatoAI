@@ -112,7 +112,6 @@ void ledTask(void *parameter)
 {
     (void)parameter;
     DeviceState lastState = static_cast<DeviceState>(-1);
-    unsigned long lastRefresh = 0;
     unsigned long authResetStarted = 0;
 
     while (1)
@@ -124,7 +123,7 @@ void ledTask(void *parameter)
         }
 
         const auto &keys = M5Cardputer.Keyboard.keysState();
-        if (keys.fn && keys.backspace)
+        if (keys.fn && (keys.backspace || keys.del))
         {
             if (authResetStarted == 0)
             {
@@ -152,12 +151,13 @@ void ledTask(void *parameter)
         }
 
         const DeviceState currentState = deviceState;
-        const unsigned long now = millis();
-        if (currentState != lastState || now - lastRefresh >= 1000)
+        // A full-screen refresh is visible on the Cardputer LCD. The status
+        // content only changes with deviceState, so repaint once per state
+        // transition instead of clearing and redrawing the panel every second.
+        if (currentState != lastState)
         {
             drawCardputerStatus(currentState);
             lastState = currentState;
-            lastRefresh = now;
         }
 
         vTaskDelay(20 / portTICK_PERIOD_MS);

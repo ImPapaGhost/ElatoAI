@@ -3,6 +3,7 @@
 #if defined(ELATO_CARDPUTER)
 
 #include "Config.h"
+#include <esp_heap_caps.h>
 
 namespace {
 
@@ -41,6 +42,36 @@ void waitForMicrophone() {
   }
 }
 
+bool beginSpeakerWithRetry() {
+  for (uint8_t attempt = 1; attempt <= 5; ++attempt) {
+    if (M5Cardputer.Speaker.begin()) {
+      return true;
+    }
+
+    Serial.printf("Cardputer speaker start attempt %u failed (free=%u largest=%u)\n",
+                  attempt, ESP.getFreeHeap(),
+                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    M5Cardputer.Speaker.end();
+    vTaskDelay((20 * attempt) / portTICK_PERIOD_MS);
+  }
+  return false;
+}
+
+bool beginMicrophoneWithRetry() {
+  for (uint8_t attempt = 1; attempt <= 5; ++attempt) {
+    if (M5Cardputer.Mic.begin()) {
+      return true;
+    }
+
+    Serial.printf("Cardputer microphone start attempt %u failed (free=%u largest=%u)\n",
+                  attempt, ESP.getFreeHeap(),
+                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    M5Cardputer.Mic.end();
+    vTaskDelay((20 * attempt) / portTICK_PERIOD_MS);
+  }
+  return false;
+}
+
 } // namespace
 
 size_t CardputerSpeakerOutput::write(uint8_t value) {
@@ -53,7 +84,15 @@ size_t CardputerSpeakerOutput::write(const uint8_t *data, size_t length) {
   }
 
   AudioLock lock;
-  if (deviceState != SPEAKING || !M5Cardputer.Speaker.isRunning()) {
+  if (deviceState != SPEAKING) {
+    return length;
+  }
+
+  if (faulted_) {
+    return length;
+  }
+
+  if (!M5Cardputer.Speaker.isRunning()) {
     return length;
   }
 
@@ -83,12 +122,41 @@ void CardputerSpeakerOutput::submitBuffer() {
   const uint8_t trailingByte =
       hasTrailingByte ? buffers_[bufferIndex_][playableBytes] : 0;
 
+  const unsigned long queueWaitStarted = millis();
+  while (M5Cardputer.Speaker.isPlaying(0) >= 2 &&
+         millis() - queueWaitStarted < 500) {
+    vTaskDelay(1);
+  }
+
+  if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
+    Serial.println("Cardputer speaker queue timed out; dropping one PCM block");
+    faulted_ = true;
+    bufferIndex_ = (bufferIndex_ + 1) % 3;
+    bufferedBytes_ = 0;
+    if (hasTrailingByte) {
+      buffers_[bufferIndex_][0] = trailingByte;
+      bufferedBytes_ = 1;
+    }
+    return;
+  }
+
   const bool accepted = M5Cardputer.Speaker.playRaw(
       reinterpret_cast<const int16_t *>(buffers_[bufferIndex_]),
       playableBytes / sizeof(int16_t), SAMPLE_RATE, false, 1, 0, false);
 
   if (!accepted) {
     Serial.println("Cardputer speaker queue rejected a PCM block");
+    faulted_ = true;
+  } else if (submittedBlocks_++ == 0) {
+    int32_t peak = 0;
+    const int16_t *samples =
+        reinterpret_cast<const int16_t *>(buffers_[bufferIndex_]);
+    for (size_t index = 0; index < playableBytes / sizeof(int16_t); ++index) {
+      const int32_t value = samples[index];
+      peak = max(peak, value < 0 ? -value : value);
+    }
+    Serial.printf("Cardputer PCM playback started (%u samples, peak=%d)\n",
+                  playableBytes / sizeof(int16_t), peak);
   }
 
   bufferIndex_ = (bufferIndex_ + 1) % 3;
@@ -101,7 +169,8 @@ void CardputerSpeakerOutput::submitBuffer() {
 
 void CardputerSpeakerOutput::flushAudio() {
   AudioLock lock;
-  if (deviceState == SPEAKING && M5Cardputer.Speaker.isRunning()) {
+  if (deviceState == SPEAKING && !faulted_ &&
+      M5Cardputer.Speaker.isRunning()) {
     submitBuffer();
   }
 }
@@ -114,9 +183,16 @@ void CardputerSpeakerOutput::discardAudio() {
   }
 }
 
+bool CardputerSpeakerOutput::isPlaybackPending() {
+  AudioLock lock;
+  return bufferedBytes_ > 0 || M5Cardputer.Speaker.isPlaying();
+}
+
 void CardputerSpeakerOutput::clearBuffer() {
   bufferIndex_ = 0;
   bufferedBytes_ = 0;
+  submittedBlocks_ = 0;
+  faulted_ = false;
 }
 
 void setupCardputerHardware() {
@@ -142,12 +218,19 @@ void setupCardputerHardware() {
   // Software volume remains controlled by ElatoAI's VolumeStream. Keeping the
   // hardware mixer at full scale preserves the existing 0-100 volume behavior.
   M5Cardputer.Speaker.setVolume(255);
+
+  // M5Cardputer.begin() leaves the speaker task marked as running before its
+  // I2S port is usable on the original Cardputer. Tear that placeholder task
+  // down once so the first speaking transition performs a clean begin().
+  if (M5Cardputer.Speaker.isRunning()) {
+    M5Cardputer.Speaker.end();
+  }
   cardputerAudioMode = CardputerAudioMode::Idle;
 
   Serial.printf("Detected M5 board: %d\n", static_cast<int>(M5.getBoard()));
 }
 
-void cardputerEnterSpeakerMode() {
+bool cardputerEnterSpeakerMode() {
   AudioLock lock;
 
   if (cardputerAudioMode == CardputerAudioMode::Microphone ||
@@ -157,15 +240,16 @@ void cardputerEnterSpeakerMode() {
   }
   cardputerSpeakerOutput.clearBuffer();
 
-  if (!M5Cardputer.Speaker.isRunning() && !M5Cardputer.Speaker.begin()) {
+  if (!M5Cardputer.Speaker.isRunning() && !beginSpeakerWithRetry()) {
     Serial.println("Unable to start the Cardputer speaker");
     cardputerAudioMode = CardputerAudioMode::Idle;
-    return;
+    return false;
   }
   cardputerAudioMode = CardputerAudioMode::Speaker;
+  return true;
 }
 
-void cardputerEnterMicrophoneMode() {
+bool cardputerEnterMicrophoneMode() {
   AudioLock lock;
   if (cardputerAudioMode == CardputerAudioMode::Speaker ||
       M5Cardputer.Speaker.isRunning()) {
@@ -173,12 +257,13 @@ void cardputerEnterMicrophoneMode() {
     M5Cardputer.Speaker.stop(0);
     M5Cardputer.Speaker.end();
   }
-  if (!M5Cardputer.Mic.isRunning() && !M5Cardputer.Mic.begin()) {
+  if (!M5Cardputer.Mic.isRunning() && !beginMicrophoneWithRetry()) {
     Serial.println("Unable to start the Cardputer microphone");
     cardputerAudioMode = CardputerAudioMode::Idle;
-    return;
+    return false;
   }
   cardputerAudioMode = CardputerAudioMode::Microphone;
+  return true;
 }
 
 void stopCardputerAudio() {

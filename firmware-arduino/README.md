@@ -99,6 +99,18 @@ non-volatile storage at runtime.
   M5Cardputer/M5Unified rather than hard-coded peripheral drivers.
 - The generic `esp32-s3-devkitc-1` environment retains the original external
   microphone, DAC/amplifier, RGB LED, touch sensor, and button behavior.
+- Cardputer speaker blocks use bounded queue waits, and completed responses
+  drain buffered PCM before the microphone is restarted. This prevents a slow
+  speaker queue from back-pressuring the websocket or clipping sentence ends.
+- The Cardputer target builds libopus with stack-based scratch arrays and gives
+  the websocket/decoder task a dedicated 32 KiB stack. This avoids libopus's
+  unchecked late 120 KB pseudo-stack allocation on this no-PSRAM board.
+- If a hosted response stops making progress without a completion event, a
+  45-second inactivity watchdog restarts the session while preserving Wi-Fi
+  and account settings. Long responses that continue streaming are unaffected.
+- The LCD redraws only when the device state changes, eliminating the visible
+  once-per-second flicker while preserving live listening/thinking/speaking
+  status transitions.
 
 For the upstream firmware architecture, see the
 [Elato firmware documentation](https://www.elatoai.com/docs/blog/firmware).
