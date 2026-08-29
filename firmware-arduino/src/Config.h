@@ -29,7 +29,9 @@
 // ---------- CHOOSE YOUR INPUT MODE ----------
 // If you want to use the touch sensor to wake up the device, uncomment the following line
 // If you want to use the button to wake up the device, comment the following line
+#if !defined(ELATO_CARDPUTER)
 #define TOUCH_MODE
+#endif
 
 extern Preferences preferences;
 extern bool factory_reset_status;

@@ -18,14 +18,18 @@ public:
 
   size_t write(const uint8_t *data, size_t len) override {
     size_t result = 0;
-    int16_t *p_in = (int16_t *)data;
-    int sample_count = len / sizeof(int16_t);
+    const int16_t *p_in = reinterpret_cast<const int16_t *>(data);
+    const size_t sample_count = len / sizeof(int16_t);
+    constexpr size_t OUTPUT_SAMPLES = 128;
+    int16_t output[OUTPUT_SAMPLES];
 
-    for (int j = 0; j < sample_count; j += 1) {
-      int16_t value = p_in[j];
-
-      int16_t out_value = pitchShift(value);
-      result += p_out->write((uint8_t *)&out_value, sizeof(int16_t));
+    for (size_t offset = 0; offset < sample_count; offset += OUTPUT_SAMPLES) {
+      const size_t count = min(OUTPUT_SAMPLES, sample_count - offset);
+      for (size_t index = 0; index < count; ++index) {
+        output[index] = pitchShift(p_in[offset + index]);
+      }
+      result += p_out->write(reinterpret_cast<const uint8_t *>(output),
+                             count * sizeof(int16_t));
     }
     return result;
   }

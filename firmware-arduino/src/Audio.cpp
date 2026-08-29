@@ -1,5 +1,6 @@
 #include "OTA.h"
 #include "Audio.h"
+#include "Cardputer.h"
 #include "PitchShift.h"
 
 // WEBSOCKET
@@ -50,15 +51,20 @@ private:
 BufferPrint bufferPrint(audioBuffer);
 OpusAudioDecoder opusDecoder;  //access guarded by wsmutex
 BufferRTOS<uint8_t> audioBuffer(AUDIO_BUFFER_SIZE, AUDIO_CHUNK_SIZE);  //producer: networkTask, consumer: audioStreamTask. Thread safe in single producer->single consumer scenario.
-I2SStream i2s; //access from audioStreamTask only
-
-// OLD with no pitch shift
-VolumeStream volume(i2s); //access from audioStreamTask only
 QueueStream<uint8_t> queue(audioBuffer); //access from audioStreamTask only
-StreamCopy copier(volume, queue);
 
-// NEW for pitch shift (lossy)
+#if defined(ELATO_CARDPUTER)
+CardputerSpeakerOutput cardputerSpeakerOutput;
+VolumeStream volume(cardputerSpeakerOutput); //access from audioStreamTask only
+PitchShiftFixedOutput pitchShift(cardputerSpeakerOutput);
+#else
+I2SStream i2s; //access from audioStreamTask only
+VolumeStream volume(i2s); //access from audioStreamTask only
 PitchShiftFixedOutput pitchShift(i2s);
+#endif
+
+// Standard and pitch-shifted output paths share the selected hardware sink.
+StreamCopy copier(volume, queue);
 VolumeStream volumePitch(pitchShift); //access from audioStreamTask only
 StreamCopy pitchCopier(volumePitch, queue);
 
@@ -76,10 +82,16 @@ unsigned long getSpeakingDuration() {
 void transitionToSpeaking() {
     vTaskDelay(50);
 
+    deviceState = PROCESSING;
     i2sInputFlushScheduled = true;
-    
-    deviceState = SPEAKING;
+
+#if defined(ELATO_CARDPUTER)
+    cardputerEnterSpeakerMode();
+#else
     digitalWrite(I2S_SD_OUT, HIGH);
+#endif
+
+    deviceState = SPEAKING;
     speakingStartTime = millis();
     
     // webSocket.enableHeartbeat(30000, 15000, 3);
@@ -97,18 +109,25 @@ void transitionToListening() {
     i2sInputFlushScheduled = true;
     i2sOutputFlushScheduled = true;
 
+#if defined(ELATO_CARDPUTER)
+    cardputerEnterMicrophoneMode();
+#else
+    digitalWrite(I2S_SD_OUT, LOW);
+#endif
+
     Serial.println("Transitioned to listening mode");
 
     deviceState = LISTENING;
-    digitalWrite(I2S_SD_OUT, LOW);
     // webSocket.disableHeartbeat();
 }
 
 // audioStreamTask -> copier.copy() (conditional on webSocket.isConnected())
 void audioStreamTask(void *parameter) {
     Serial.println("Starting I2S stream pipeline...");
-    
+
+#if !defined(ELATO_CARDPUTER)
     pinMode(I2S_SD_OUT, OUTPUT);
+#endif
 
     OpusSettings cfg;
     cfg.sample_rate = SAMPLE_RATE;
@@ -127,6 +146,7 @@ void audioStreamTask(void *parameter) {
     
     queue.begin();
 
+#if !defined(ELATO_CARDPUTER)
     auto config = i2s.defaultConfig(TX_MODE);
     config.bits_per_sample = BITS_PER_SAMPLE;
     config.sample_rate = SAMPLE_RATE;
@@ -138,6 +158,7 @@ void audioStreamTask(void *parameter) {
 
     config.copyFrom(info);  
     i2s.begin(config);  
+#endif
 
     // Initialize both volume streams once
     auto vcfg = volume.defaultConfig();
@@ -153,7 +174,11 @@ void audioStreamTask(void *parameter) {
     while (1) {
         if ( i2sOutputFlushScheduled) {
             i2sOutputFlushScheduled = false;
+#if defined(ELATO_CARDPUTER)
+            cardputerSpeakerOutput.discardAudio();
+#else
             i2s.flush();
+#endif
             volume.flush();
             volumePitch.flush();
             queue.flush();
@@ -165,6 +190,11 @@ void audioStreamTask(void *parameter) {
             } else {
                 copier.copy();
             }
+#if defined(ELATO_CARDPUTER)
+            // StreamCopy can leave a short final block in the adapter. Queue it
+            // immediately so sentence endings are not stranded in RAM.
+            cardputerSpeakerOutput.flushAudio();
+#endif
         }
         else {
             //we should always read from audioBuffer, otherwise writing thread can stuck
@@ -203,12 +233,35 @@ public:
 };
 
 WebsocketStream wsStream; //guard with wsMutex
+#if !defined(ELATO_CARDPUTER)
 I2SStream i2sInput; //access from micTask only
 StreamCopy micToWsCopier(wsStream, i2sInput);
+#endif
 volatile bool i2sInputFlushScheduled = false;
 const int MIC_COPY_SIZE = 64;
 
 void micTask(void *parameter) {
+#if defined(ELATO_CARDPUTER)
+    // 20 ms of mono PCM at 16 kHz. This is large enough for efficient websocket
+    // frames while keeping mic/speaker handoff latency bounded.
+    constexpr size_t MIC_FRAME_SAMPLES = 320; // 20 ms at 16 kHz
+    int16_t micFrame[MIC_FRAME_SAMPLES];
+
+    while (1) {
+        if (i2sInputFlushScheduled) {
+            i2sInputFlushScheduled = false;
+            memset(micFrame, 0, sizeof(micFrame));
+        }
+
+        if (deviceState == LISTENING && webSocket.isConnected() &&
+            readCardputerMicrophone(micFrame, MIC_FRAME_SAMPLES)) {
+            wsStream.write(reinterpret_cast<const uint8_t *>(micFrame),
+                           sizeof(micFrame));
+        } else {
+            vTaskDelay(5);
+        }
+    }
+#else
     // Configure and start I2S input stream.
     auto i2sConfig = i2sInput.defaultConfig(RX_MODE);
     i2sConfig.bits_per_sample = BITS_PER_SAMPLE;
@@ -241,6 +294,18 @@ void micTask(void *parameter) {
             vTaskDelay(10);
         }
     }
+#endif
+}
+
+void shutdownAudioHardware() {
+#if defined(ELATO_CARDPUTER)
+    stopCardputerAudio();
+#else
+    i2s_stop(I2S_PORT_IN);
+    i2s_stop(I2S_PORT_OUT);
+    i2s_driver_uninstall(I2S_PORT_IN);
+    i2s_driver_uninstall(I2S_PORT_OUT);
+#endif
 }
 
 // WEBSOCKET EVENTS
@@ -252,6 +317,11 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     case WStype_DISCONNECTED:
         Serial.printf("[WSc] Disconnected!\n");
         deviceState = IDLE;
+#if defined(ELATO_CARDPUTER)
+        i2sInputFlushScheduled = true;
+        i2sOutputFlushScheduled = true;
+        stopCardputerAudio();
+#endif
         break;
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);

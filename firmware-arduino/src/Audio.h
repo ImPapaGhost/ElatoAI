@@ -25,7 +25,9 @@ constexpr size_t AUDIO_BUFFER_SIZE = 1024 * 10;     // total bytes in the buffer
 constexpr size_t AUDIO_CHUNK_SIZE  = 1024;         // ideal read/write chunk size
 extern OpusAudioDecoder opusDecoder;
 extern BufferRTOS<uint8_t> audioBuffer;
+#if !defined(ELATO_CARDPUTER)
 extern I2SStream i2s; 
+#endif
 extern VolumeStream volume;
 extern QueueStream<uint8_t> queue;
 extern StreamCopy copier;
@@ -38,8 +40,10 @@ extern AudioInfo info;
 extern volatile bool i2sOutputFlushScheduled;
 
 // AUDIO INPUT
+#if !defined(ELATO_CARDPUTER)
 extern I2SStream i2sInput;
 extern StreamCopy micToWsCopier;
+#endif
 extern volatile bool i2sInputFlushScheduled;
 
 // WEBSOCKET
@@ -53,5 +57,6 @@ void audioStreamTask(void *parameter);
 
 // AUDIO INPUT
 void micTask(void *parameter);
+void shutdownAudioHardware();
 
 #endif

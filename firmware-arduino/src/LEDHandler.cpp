@@ -1,5 +1,142 @@
 #include "LEDHandler.h"
 
+#if defined(ELATO_CARDPUTER)
+
+#include "Cardputer.h"
+#include <WiFi.h>
+
+namespace {
+
+struct StatePresentation {
+    const char *label;
+    const char *hint;
+    uint16_t color;
+    uint16_t textColor;
+};
+
+StatePresentation presentationFor(DeviceState state)
+{
+    switch (state)
+    {
+    case SOFT_AP:
+        return {"SET UP WI-FI", "Join ELATO-DEVICE", TFT_MAGENTA, TFT_WHITE};
+    case LISTENING:
+        return {"LISTENING", "Speak naturally", TFT_YELLOW, TFT_BLACK};
+    case PROCESSING:
+        return {"THINKING", "Waiting for the agent", TFT_ORANGE, TFT_BLACK};
+    case SPEAKING:
+        return {"SPEAKING", "Playing the response", TFT_CYAN, TFT_BLACK};
+    case OTA:
+        return {"UPDATING", "Keep power connected", TFT_BLUE, TFT_WHITE};
+    case FACTORY_RESET:
+        return {"RESETTING", "Restoring defaults", TFT_RED, TFT_WHITE};
+    case SLEEP:
+        return {"SLEEPING", "Press G0 to wake", TFT_DARKGREY, TFT_WHITE};
+    case SETUP:
+        return {"STARTING", "Initializing hardware", TFT_PURPLE, TFT_WHITE};
+    case WAITING:
+        return {"WAITING", "Connected", TFT_NAVY, TFT_WHITE};
+    case IDLE:
+    default:
+        return {"READY", "Connecting to ElatoAI", TFT_GREEN, TFT_BLACK};
+    }
+}
+
+void drawCardputerStatus(DeviceState state)
+{
+    const StatePresentation view = presentationFor(state);
+    auto &display = M5Cardputer.Display;
+    const int width = display.width();
+
+    display.startWrite();
+    display.fillScreen(TFT_BLACK);
+
+    display.fillRect(0, 0, width, 24, TFT_DARKCYAN);
+    display.setTextDatum(middle_left);
+    display.setTextSize(1);
+    display.setTextColor(TFT_WHITE, TFT_DARKCYAN);
+    display.drawString("ELATO AI", 8, 12);
+
+    const int battery = M5Cardputer.Power.getBatteryLevel();
+    if (battery >= 0)
+    {
+        display.setTextDatum(middle_right);
+        display.drawString(String(battery) + "%", width - 8, 12);
+    }
+
+    display.fillRoundRect(8, 31, width - 16, 43, 7, view.color);
+    display.setTextDatum(middle_center);
+    display.setTextSize(2);
+    display.setTextColor(view.textColor, view.color);
+    display.drawString(view.label, width / 2, 52);
+
+    display.setTextSize(1);
+    display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+    display.drawString(view.hint, width / 2, 84);
+
+    display.setTextDatum(top_center);
+    if (state == SOFT_AP)
+    {
+        display.setTextColor(TFT_WHITE, TFT_BLACK);
+        display.drawString("Open 192.168.4.1/wifi", width / 2, 97);
+    }
+    else if (WiFi.status() == WL_CONNECTED)
+    {
+        display.setTextColor(TFT_GREENYELLOW, TFT_BLACK);
+        display.drawString(WiFi.SSID(), width / 2, 97);
+        display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        display.drawString(WiFi.localIP().toString(), width / 2, 109);
+    }
+    else
+    {
+        display.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        display.drawString("Connecting to Wi-Fi...", width / 2, 103);
+    }
+
+    display.setTextDatum(bottom_center);
+    display.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    display.drawString("Hold G0 to sleep", width / 2, display.height() - 2);
+    display.endWrite();
+}
+
+} // namespace
+
+void setLEDColor(uint8_t, uint8_t, uint8_t) {}
+void turnOffLED() {}
+void turnOnLED() {}
+void setupRGBLED() {}
+void turnOnBlueLED() {}
+void turnOnRedLEDFlash() {}
+
+void ledTask(void *parameter)
+{
+    (void)parameter;
+    DeviceState lastState = static_cast<DeviceState>(-1);
+    unsigned long lastRefresh = 0;
+
+    while (1)
+    {
+        M5Cardputer.update();
+        if (M5Cardputer.BtnA.wasHold())
+        {
+            sleepRequested = true;
+        }
+
+        const DeviceState currentState = deviceState;
+        const unsigned long now = millis();
+        if (currentState != lastState || now - lastRefresh >= 1000)
+        {
+            drawCardputerStatus(currentState);
+            lastState = currentState;
+            lastRefresh = now;
+        }
+
+        vTaskDelay(20 / portTICK_PERIOD_MS);
+    }
+}
+
+#else
+
 int brightness = 0;
 int fadeAmount = 5;
 static unsigned long lastToggle = 0;
@@ -311,3 +448,5 @@ void ledTask(void *parameter)
         vTaskDelay(20 / portTICK_PERIOD_MS); // Approximate the delay from the original `pulsateLED()`
     }
 }
+
+#endif // ELATO_CARDPUTER

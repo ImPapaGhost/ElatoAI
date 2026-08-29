@@ -33,6 +33,7 @@ English | [中文](README.zh.md)
 Realtime AI Speech powered by 100+ Voice AI models on ESP32, with Secure WebSockets & Edge Functions for >20-minute uninterrupted conversations globally.
 
 - [🚀 Quick Start](https://www.elatoai.com/docs/quickstart)
+- [⌨️ Build for M5Stack Cardputer](firmware-arduino/README.md)
 - [Build with PlatformIO](https://www.elatoai.com/docs/platformio)
 - [Build on Arduino IDE](https://www.elatoai.com/docs/arduino)
 - [Deploy globally](https://www.elatoai.com/docs/blog/deploying-globally)
@@ -70,6 +71,13 @@ Select from 100+ models from the list above and use the FastAPI server to create
 ## 👷‍♀️ DIY Hardware Design
 
 <img src="assets/pcb-design.png" alt="Hardware Setup" width="100%">
+
+### M5Stack Cardputer
+
+This fork includes a ready-to-build firmware target for the M5Stack Cardputer,
+Cardputer v1.1, and Cardputer-Adv. It uses the built-in screen, microphone,
+speaker, battery monitor, and G0 sleep/wake button while retaining the original
+generic ESP32-S3 target. See the [Cardputer build and first-boot guide](firmware-arduino/README.md).
 
 ## 📱 App Design
 

@@ -1,14 +1,21 @@
+#if !defined(ELATO_CARDPUTER)
 #include "Button.h"
+#endif
+#include "Cardputer.h"
 #include "FactoryReset.h"
 #include "LEDHandler.h"
 #include "OTA.h"
 #include "WifiManager.h"
+#if !defined(ELATO_CARDPUTER)
 #include <driver/touch_sensor.h>
+#endif
 
+#if !defined(ELATO_CARDPUTER)
 #define TOUCH_THRESHOLD 28000
 #define REQUIRED_RELEASE_CHECKS                                                \
   100 // how many consecutive times we need "below threshold" to confirm release
 #define TOUCH_DEBOUNCE_DELAY 500 // milliseconds
+#endif
 
 AsyncWebServer webServer(80);
 WIFIMANAGER WifiManager;
@@ -30,10 +37,6 @@ void enterSleep() {
 
   xSemaphoreTake(wsMutex, portMAX_DELAY);
 
-  // Stop audio tasks first
-  i2s_stop(I2S_PORT_IN);
-  i2s_stop(I2S_PORT_OUT);
-
   // Properly disconnect WebSocket and wait for it to complete
   if (webSocket.isConnected()) {
     webSocket.disconnect();
@@ -42,14 +45,14 @@ void enterSleep() {
   xSemaphoreGive(wsMutex);
   delay(100);
 
-  // Stop all tasks that might be using I2S or other peripherals
-  i2s_driver_uninstall(I2S_PORT_IN);
-  i2s_driver_uninstall(I2S_PORT_OUT);
+  shutdownAudioHardware();
 
   // Flush any remaining serial output
   Serial.flush();
 
-#ifdef TOUCH_MODE
+#if defined(ELATO_CARDPUTER)
+  prepareCardputerForSleep();
+#elif defined(TOUCH_MODE)
   touch_pad_intr_disable(TOUCH_PAD_INTR_MASK_ALL);
   while (touchRead(TOUCH_PAD_NUM2) > TOUCH_THRESHOLD) {
     delay(50);
@@ -88,6 +91,7 @@ void printOutESP32Error(esp_err_t err) {
   }
 }
 
+#if !defined(ELATO_CARDPUTER)
 static void onButtonLongPressUpEventCb(void *button_handle, void *usr_data) {
   Serial.println("Button long press end");
   delay(10);
@@ -99,6 +103,7 @@ static void onButtonDoubleClickCb(void *button_handle, void *usr_data) {
   delay(10);
   sleepRequested = true;
 }
+#endif
 
 void getAuthTokenFromNVS() {
   preferences.begin("auth", false);
@@ -124,6 +129,7 @@ void setupWiFi() {
   webServer.begin();
 }
 
+#if !defined(ELATO_CARDPUTER)
 void touchTask(void *parameter) {
   touch_pad_init();
   touch_pad_config(TOUCH_PAD_NUM2);
@@ -165,6 +171,7 @@ void touchTask(void *parameter) {
   }
   vTaskDelete(NULL);
 }
+#endif
 
 void setupDeviceMetadata() {
   // factoryResetDevice();
@@ -187,12 +194,19 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
+#if defined(ELATO_CARDPUTER)
+  setupCardputerHardware();
+#endif
+
   // SETUP
   setupDeviceMetadata();
   wsMutex = xSemaphoreCreateMutex();
 
 // INTERRUPT
-#ifdef TOUCH_MODE
+#if defined(ELATO_CARDPUTER)
+  getErr = esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, LOW);
+  printOutESP32Error(getErr);
+#elif defined(TOUCH_MODE)
   xTaskCreate(touchTask, "Touch Task", 4096, NULL, configMAX_PRIORITIES - 2,
               NULL);
 #else
@@ -204,12 +218,22 @@ void setup() {
   btn->detachSingleClickEvent();
 #endif
 
-  // Pin audio tasks to Core 1 (application core)
+#if defined(ELATO_CARDPUTER)
+  constexpr uint32_t indicatorTaskStack = 6144;
+  constexpr UBaseType_t indicatorTaskPriority = 1;
+#else
+  constexpr uint32_t indicatorTaskStack = 4096;
+  constexpr UBaseType_t indicatorTaskPriority = 5;
+#endif
+
+  // Pin the UI/LED and audio tasks to Core 1 (application core). Cardputer's
+  // display task stays below audio priority so a screen refresh cannot glitch
+  // microphone capture or speaker playback.
   xTaskCreatePinnedToCore(ledTask,    // Function
                           "LED Task", // Name
-                          4096,       // Stack size
+                          indicatorTaskStack,
                           NULL,       // Parameters
-                          5,          // Priority
+                          indicatorTaskPriority,
                           NULL,       // Handle
                           1           // Core 1 (application core)
   );
