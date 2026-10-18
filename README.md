@@ -32,12 +32,170 @@ English | [中文](README.zh.md)
 
 Realtime AI Speech powered by 100+ Voice AI models on ESP32, with Secure WebSockets & Edge Functions for >20-minute uninterrupted conversations globally.
 
-- [🚀 Quick Start](https://www.elatoai.com/docs/quickstart)
-- [⌨️ Build for M5Stack Cardputer](firmware-arduino/README.md)
+- [⌨️ Cardputer installation and setup (start here)](#cardputer-installation-and-setup)
+- [Cardputer firmware details](firmware-arduino/README.md)
+- [Upstream Quick Start / self-hosting](https://www.elatoai.com/docs/quickstart)
 - [Build with PlatformIO](https://www.elatoai.com/docs/platformio)
 - [Build on Arduino IDE](https://www.elatoai.com/docs/arduino)
 - [Deploy globally](https://www.elatoai.com/docs/blog/deploying-globally)
 - [🤖🤖🤖 Deploy multiple devices](https://www.elatoai.com/docs/blog/multiple-devices)
+
+## Cardputer installation and setup
+
+This is an unofficial community port of [ElatoAI](https://github.com/akdeb/ElatoAI)
+for the M5Stack Cardputer. It uses the built-in microphone, speaker, screen, and
+keyboard, so no external audio hardware or wiring is needed. The original
+Cardputer has been tested with repeated conversations and long voice replies;
+Cardputer v1.1 and ADV support has not been physically verified for this port.
+
+These steps use **ElatoAI's hosted service**, the default `ELATO_MODE` in this
+fork. You need an ElatoAI account with available hosted usage. You do not need
+to run a local server or supply your own model API key for this setup. Voice
+audio is sent to ElatoAI's service; check your account for current usage limits
+and character availability.
+
+### 1. Get what you need
+
+- An M5Stack Cardputer and a USB-C **data** cable.
+- A computer with [Git](https://git-scm.com/downloads) and
+  [Python 3.12](https://www.python.org/downloads/) installed. Python 3.12 is the
+  version used to build and test this port. On Windows, include the Python
+  launcher (`py`) when installing Python.
+- A 2.4 GHz Wi-Fi network with internet access.
+- Your own [ElatoAI account](https://www.elatoai.com/).
+
+### 2. Download this fork and install the build tools
+
+On **Windows**, open PowerShell in the folder where you want to keep the project
+and run these commands one line at a time:
+
+```powershell
+git clone --branch main https://github.com/ImPapaGhost/ElatoAI.git
+cd ElatoAI\firmware-arduino
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install platformio==6.1.19
+.\.venv\Scripts\python.exe -m platformio run -e m5stack-cardputer
+```
+
+Keep using this terminal in `ElatoAI\firmware-arduino` for the remaining commands.
+The first build downloads the compiler and libraries and can take several
+minutes. Wait for `SUCCESS` before continuing. The commands call the virtual
+environment directly, so there is no activation script to run.
+
+<details>
+<summary>macOS / Linux commands</summary>
+
+With Git and Python 3.12 installed, run:
+
+```bash
+git clone --branch main https://github.com/ImPapaGhost/ElatoAI.git
+cd ElatoAI/firmware-arduino
+python3.12 -m venv .venv
+./.venv/bin/python -m pip install platformio==6.1.19
+./.venv/bin/python -m platformio run -e m5stack-cardputer
+```
+
+For the commands below, replace `.\.venv\Scripts\python.exe` with
+`./.venv/bin/python` and `COM3` with your device's port, such as
+`/dev/cu.usbmodem...` on macOS or `/dev/ttyACM0` on Linux.
+
+</details>
+
+### 3. Flash the Cardputer over USB
+
+Connect the Cardputer with the USB-C data cable and turn its power switch on.
+Find its serial port:
+
+```powershell
+.\.venv\Scripts\python.exe -m platformio device list
+```
+
+Find the USB serial device that appears when you plug in the Cardputer. In the
+next command, replace `COM3` with that port:
+
+```powershell
+.\.venv\Scripts\python.exe -m platformio run -e m5stack-cardputer -t upload --upload-port COM3
+```
+
+Wait for the upload to finish with `SUCCESS`. **Copy the address printed next to
+`MAC:` in the upload output**; you will use this Cardputer's address to register
+it with ElatoAI. It has six pairs of characters, like `AA:BB:CC:DD:EE:FF`.
+
+If the upload stays at `Connecting...`, hold **G0**, press and release **Reset**,
+release **G0**, and retry the upload. After a successful upload, tap Reset if the
+firmware does not start automatically.
+
+This USB installation writes the bootloader and partition table as well as the
+app. It replaces the existing firmware, including an installed Launcher. If you
+want to keep Launcher, see the Launcher note below before flashing.
+
+### 4. Connect the Cardputer to Wi-Fi
+
+1. When the screen says `SET UP WI-FI`, use a phone or computer to join the
+   **ELATO-DEVICE** Wi-Fi network. Stay connected even if it says "no internet."
+2. On that same phone or computer, open
+   [http://192.168.4.1/wifi](http://192.168.4.1/wifi).
+3. Select your **2.4 GHz** home Wi-Fi network, enter its password, and save it.
+4. Reconnect your phone or computer to your normal Wi-Fi. The Cardputer should
+   connect to the network you saved; tap Reset once if needed.
+
+If `192.168.4.1` times out, first check that the phone or computer is still
+connected to **ELATO-DEVICE**. The setup address is only reachable on that network.
+Saved Wi-Fi networks are reused on later boots.
+
+### 5. Register the device and choose a character
+
+1. Sign in to [ElatoAI](https://www.elatoai.com/home) using your own account.
+2. Open [Settings → Device](https://www.elatoai.com/home/settings/device) and use
+   the DIY-device registration option to register the **MAC address from step 3**.
+   Follow the site's prompts until the device is shown as registered.
+3. Return to the [dashboard](https://www.elatoai.com/home), choose an available
+   character, and select it so it is marked **LIVE**. We tested this port with
+   **Ted the Teddy**; choose Ted if it is available in your account.
+4. Tap **Reset** on the Cardputer so it reconnects with your registration and
+   character selection.
+
+Character selection belongs to each ElatoAI account; Ted is not bundled into
+the firmware. For details about ElatoAI's hosted registration flow, see its
+[Quick Start → Choose Edge Server option](https://www.elatoai.com/docs/quickstart#choose-edge-server-option).
+
+### 6. Start talking
+
+The Cardputer should connect, play the character's greeting, and show
+**LISTENING**. Say a short sentence, then pause. It should show **THINKING**,
+then **SPEAKING**, and return to **LISTENING** after the reply finishes. Wait
+for **LISTENING** before your next turn; the microphone and speaker take turns.
+
+After setup, you can disconnect USB and use the battery. On later boots, the
+Cardputer reconnects using its saved Wi-Fi and account token.
+
+### Controls, updates, and quick fixes
+
+- **Sleep / wake:** hold G0 to sleep; press G0 to wake.
+- **Account token reset:** hold **Fn + Backspace/Delete** for two seconds if the
+  saved token is stale or you have moved the device to another account. This
+  clears the device token and restarts it while preserving saved Wi-Fi. Register
+  the device to the intended account on the website first.
+- **Connected but no greeting:** check that the MAC is registered to the right
+  account, a character is LIVE, and the account has available hosted usage; then
+  tap Reset.
+- **Serial diagnostics:** run
+  `.\.venv\Scripts\python.exe -m platformio device monitor --port COM3 --baud 115200`.
+  Replace the port as above. Press **Ctrl+C** to close the monitor before flashing.
+- **Install future versions:** from `firmware-arduino`, run `git pull --ff-only`,
+  then repeat the USB upload command in step 3. This port's hosted firmware/OTA
+  update is not configured; use the fork's USB upload path for updates.
+
+**Launcher users:** the build produces
+`firmware-arduino/.pio/build/m5stack-cardputer/firmware.bin` (relative to the
+repository root). This is an application image, not a merged USB-flash image.
+Installation through Launcher has not yet been tested for this port; the steps
+above describe the tested direct USB installation. See
+[Launcher's binary-installation guide](https://github.com/bmorcelli/Launcher/wiki/Obtaining-binaries-to-launch)
+if you want to test installing the app through Launcher.
+
+For advanced firmware settings, self-hosting, and hardware notes, see the
+[Cardputer firmware README](firmware-arduino/README.md).
 
 ## 📽️ Demo Video
 
