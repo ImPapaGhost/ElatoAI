@@ -214,6 +214,10 @@ void setupDeviceMetadata() {
 }
 
 void setup() {
+#if defined(EASY_SETUP_MODE)
+  // USB configuration frames can exceed the native CDC default of 256 bytes.
+  Serial.setRxBufferSize(2048);
+#endif
   Serial.begin(115200);
   delay(500);
 
