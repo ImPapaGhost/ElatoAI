@@ -32,20 +32,55 @@ English | [中文](README.zh.md)
 
 Realtime AI Speech powered by 100+ Voice AI models on ESP32, with Secure WebSockets & Edge Functions for >20-minute uninterrupted conversations globally.
 
-- [⌨️ Cardputer installation and setup (start here)](#cardputer-installation-and-setup)
+- [⌨️ Easy Cardputer setup with your own API key (start here)](#easy-cardputer-setup-preview)
+- [Original ElatoAI-hosted Cardputer setup](#cardputer-installation-and-setup)
 - [Cardputer firmware details](firmware-arduino/README.md)
-- [Private independent service (preview)](independent/README.md)
+- [Independent service / private owner setup](independent/README.md)
 - [Upstream Quick Start / self-hosting](https://www.elatoai.com/docs/quickstart)
 - [Build with PlatformIO](https://www.elatoai.com/docs/platformio)
 - [Build on Arduino IDE](https://www.elatoai.com/docs/arduino)
 - [Deploy globally](https://www.elatoai.com/docs/blog/deploying-globally)
 - [🤖🤖🤖 Deploy multiple devices](https://www.elatoai.com/docs/blog/multiple-devices)
 
+## Easy Cardputer setup (preview)
+
+Install one firmware, enter your Wi-Fi and voice-provider details on the
+Cardputer, and start talking. You do not need an ElatoAI account, a Supabase
+project, your own Vercel deployment, or a `PersonalConfig.h` file for this edition.
+
+1. Connect your original M5Stack Cardputer to a computer with a USB-C **data**
+   cable. Open the [Cardputer Voice installer](https://cardputer-voice.vercel.app/setup)
+   in desktop Chrome or Edge and follow its installation steps. USB installation
+   replaces the firmware currently on the device, including Launcher.
+2. Follow the Cardputer's on-screen Wi-Fi setup. Choose your **2.4 GHz** network
+   and type its password using the keyboard. Press **Enter** to continue.
+3. Choose your provider: **Gemini**, **ElevenLabs**, or **Hume**. Enter your own
+   provider API key. ElevenLabs also needs your existing **Agent ID**; Hume needs
+   your existing **Config ID**. Create those in the provider's own dashboard first.
+4. Finish the on-screen prompts. Wait for the greeting and **LISTENING**, then
+   speak. Your settings are saved for later boots.
+
+To change the key or provider later, hold **Fn + W for two seconds**. Choose
+**Enter: keep Wi-Fi** to avoid typing the Wi-Fi password again, or **Tab: change**
+to choose another network.
+
+For actual cloned voices, use an ElevenLabs agent or Hume configuration with a
+voice available in that provider account. This port reuses ElatoAI's existing
+provider integrations; Gemini's built-in voices are a separate choice.
+Provider charges and account restrictions still apply, and clone access is not
+guaranteed to be free. The shared preview has a 10-minute daily allowance per
+provider key and a 20-minute daily allowance across all guests.
+
+The original private-owner voice path has been tested on a Cardputer. The new
+Easy setup and provider-entry path is still awaiting hardware verification.
+See the [Easy setup guide](independent/README.md#easy-setup-for-your-cardputer)
+for provider requirements, usage limits, privacy, and the optional build command.
+
 ## Cardputer installation and setup
 
-**Using your own Supabase, Vercel, and Gemini accounts?** See the
-[private independent-service preview](independent/README.md). The steps below
-install the original ElatoAI-hosted edition.
+The steps below install the **original ElatoAI-hosted edition**, rather than
+the Easy bring-your-own-key edition above. For an independent private-owner
+deployment, see the [independent-service guide](independent/README.md).
 
 This is an unofficial community port of [ElatoAI](https://github.com/akdeb/ElatoAI)
 for the M5Stack Cardputer. It uses the built-in microphone, speaker, screen, and

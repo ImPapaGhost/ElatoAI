@@ -103,6 +103,13 @@ class WIFIMANAGER {
     // Add another AP to the list of known WIFIs
     bool addWifi(String apName, String apPass, bool updateNVS = true);
 
+#if defined(ELATO_CARDPUTER)
+    // Boot-only setup: no application or Wi-Fi background tasks may be running.
+    // A fresh association is required before one NVS slot is updated. Existing
+    // saved networks are left intact if the password/network is invalid.
+    bool connectAndSaveForSetup(const String &ssid, const String &password, String &error);
+#endif
+
     // Delete Wifi from apList by ID
     bool delWifi(uint8_t apId);
 

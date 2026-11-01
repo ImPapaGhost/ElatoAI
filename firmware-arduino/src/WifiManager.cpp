@@ -12,8 +12,16 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <Config.h>
+#if defined(EASY_SETUP_MODE)
+#include "CardputerSetup.h"
+#endif
 
 bool isDeviceRegistered() {
+#if defined(EASY_SETUP_MODE)
+  // BYOK devices never request an ElatoAI account token, even when setup was
+  // cancelled before a provider key was entered.
+  return cardputerProviderConfigured();
+#else
   if (!authTokenGlobal.isEmpty()) {
     return true;
   }
@@ -62,6 +70,7 @@ bool isDeviceRegistered() {
     // If we get here, either the request failed or no token was found
     http.end();
     return false;
+#endif
 }
 
 void connectCb() {
@@ -232,8 +241,8 @@ void WIFIMANAGER::clearApList() {
  */
 bool WIFIMANAGER::loadFromNVS() {
   configuredSSIDs = 0;
+  clearApList();
   if (preferences.begin(NVS, true)) {
-    clearApList();
     char tmpKey[10] = { 0 };
     for(uint8_t i=0; i<WIFIMANAGER_MAX_APS; i++) {
       sprintf(tmpKey, "apName%d", i);
@@ -315,6 +324,81 @@ bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
   logMessage("[WIFI] No slot available to store SSID credentials");
   return false; // max entries reached
 }
+
+#if defined(ELATO_CARDPUTER)
+bool WIFIMANAGER::connectAndSaveForSetup(const String &ssid, const String &password, String &error) {
+  if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 63) {
+    error = "Check network name/password length";
+    return false;
+  }
+  uint8_t slot = WIFIMANAGER_MAX_APS;
+  for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; ++i) {
+    if (apList[i].apName == ssid) { slot = i; break; }
+    if (slot == WIFIMANAGER_MAX_APS && apList[i].apName.isEmpty()) slot = i;
+  }
+  if (slot == WIFIMANAGER_MAX_APS) {
+    error = "Saved list full. Use browser setup";
+    return false;
+  }
+
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(false, false);
+  const unsigned long disconnectStarted = millis();
+  while (WiFi.status() == WL_CONNECTED && millis() - disconnectStarted < 1500) delay(20);
+  if (WiFi.status() == WL_CONNECTED) {
+    error = "Wi-Fi busy. Please retry";
+    return false;
+  }
+
+  // Do not accept the previous association for a same-SSID password edit.
+  WiFi.begin(ssid.c_str(), password.c_str());
+  const unsigned long started = millis();
+  bool connected = false;
+  while (millis() - started < 15000) {
+    const wl_status_t status = WiFi.status();
+    if (status == WL_CONNECTED && WiFi.SSID() == ssid) { connected = true; break; }
+    // begin() starts association asynchronously; failure status from the last
+    // attempt can remain cached briefly. Give this fresh attempt time to emit
+    // its own events so correcting a password can succeed without rebooting.
+    if (millis() - started >= 1500 &&
+        (status == WL_CONNECT_FAILED || status == WL_NO_SSID_AVAIL)) break;
+    delay(50);
+  }
+  if (!connected) {
+    WiFi.disconnect(false, false);
+    error = "Wrong password or network unavailable";
+    return false;
+  }
+  if (!preferences.begin(NVS, false)) {
+    error = "Could not save Wi-Fi settings";
+    return false;
+  }
+  char passKey[10];
+  char nameKey[10];
+  snprintf(passKey, sizeof(passKey), "apPass%u", slot);
+  snprintf(nameKey, sizeof(nameKey), "apName%u", slot);
+  // Password first, then publish the name of a new slot. Never clear NVS or
+  // overwrite another working network to make room for an unverified attempt.
+  const bool passSaved = preferences.putString(passKey, password) == password.length();
+  const bool nameSaved = passSaved && preferences.putString(nameKey, ssid) == ssid.length();
+  // putString("") returns zero both on success and failure. Read back with a
+  // nonempty sentinel so an absent open-network password cannot look saved.
+  const bool verified = nameSaved &&
+    preferences.getString(passKey, "\001not-written\002") == password &&
+    preferences.getString(nameKey, "\001not-written\002") == ssid;
+  preferences.end();
+  if (!verified) {
+    error = "Connected, but settings did not save";
+    return false;
+  }
+  if (apList[slot].apName.isEmpty()) ++configuredSSIDs;
+  apList[slot].apName = ssid;
+  apList[slot].apPass = password;
+  error = "";
+  return true;
+}
+#endif
 
 /**
  * @brief Drop a known SSID entry ID from the known list and write change to NVS

@@ -75,5 +75,8 @@ void audioStreamTask(void *parameter);
 // AUDIO INPUT
 void micTask(void *parameter);
 void shutdownAudioHardware();
+#if defined(EASY_SETUP_MODE)
+bool cardputerProviderConnectionFailed();
+#endif
 
 #endif

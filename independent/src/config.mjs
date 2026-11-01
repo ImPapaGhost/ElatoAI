@@ -64,5 +64,6 @@ export function publicConfig(config) {
     sessionSeconds: config.sessionSeconds,
     dailyVoiceSeconds: config.dailyVoiceSeconds,
     voices: VOICES,
+    easySetup: { providers: ['gemini', 'elevenlabs', 'hume'], providerKeysStoredOnServer: false },
   };
 }

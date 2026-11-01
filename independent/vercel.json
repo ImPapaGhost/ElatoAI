@@ -8,7 +8,16 @@
     }
   },
   "rewrites": [
+    { "source": "/setup", "destination": "/api/index?route=public&path=/setup" },
+    { "source": "/setup.html", "destination": "/api/index?route=public&path=/setup.html" },
+    { "source": "/setup.css", "destination": "/api/index?route=public&path=/setup.css" },
+    { "source": "/install-button.js", "destination": "/api/index?route=public&path=/install-button.js" },
+    { "source": "/installer-LICENSE.txt", "destination": "/api/index?route=public&path=/installer-LICENSE.txt" },
+    { "source": "/firmware/:file", "destination": "/api/index?route=public&path=/firmware/:file" },
+    { "source": "/style.css", "destination": "/api/index?route=public&path=/style.css" },
+    { "source": "/app.js", "destination": "/api/index?route=public&path=/app.js" },
     { "source": "/ws/esp32", "destination": "/api/index?route=voice" },
+    { "source": "/ws/byok", "destination": "/api/index?route=voice-byok" },
     { "source": "/api/config", "destination": "/api/index?route=config" },
     { "source": "/api/login", "destination": "/api/index?route=login" },
     { "source": "/api/logout", "destination": "/api/index?route=logout" },

@@ -45,7 +45,11 @@ volatile bool sleepRequested = false;
 #if defined(INDEPENDENT_MODE)
 const char *ws_server = CARDPUTER_SERVER_HOST;
 const uint16_t ws_port = 443;
+#if defined(EASY_SETUP_MODE)
+const char *ws_path = "/ws/byok";
+#else
 const char *ws_path = "/ws/esp32";
+#endif
 const char *backend_server = CARDPUTER_SERVER_HOST;
 const uint16_t backend_port = 443;
 

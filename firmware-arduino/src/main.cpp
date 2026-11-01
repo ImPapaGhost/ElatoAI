@@ -2,6 +2,9 @@
 #include "Button.h"
 #endif
 #include "Cardputer.h"
+#if defined(ELATO_CARDPUTER)
+#include "CardputerSetup.h"
+#endif
 #include "FactoryReset.h"
 #include "LEDHandler.h"
 #include "OTA.h"
@@ -221,6 +224,13 @@ void setup() {
   // SETUP
   setupDeviceMetadata();
   wsMutex = xSemaphoreCreateMutex();
+
+#if defined(ELATO_CARDPUTER)
+  // Keyboard setup owns the screen/radio before any audio or network tasks run.
+  loadCardputerProviderConfig();
+  WifiManager.loadFromNVS();
+  runCardputerBootSetup(WifiManager, consumeCardputerSetupRequest());
+#endif
 
 // INTERRUPT
 #if defined(ELATO_CARDPUTER)

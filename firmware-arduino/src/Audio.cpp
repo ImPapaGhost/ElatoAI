@@ -1,6 +1,12 @@
 #include "OTA.h"
 #include "Audio.h"
 #include "Cardputer.h"
+#if defined(EASY_SETUP_MODE)
+#include "CardputerSetup.h"
+#include <atomic>
+static std::atomic<bool> easyVoiceError{false};
+bool cardputerProviderConnectionFailed() { return easyVoiceError.load(); }
+#endif
 #include "PitchShift.h"
 
 // WEBSOCKET
@@ -369,6 +375,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         // A used-up daily allowance should not poll the free backend every
         // five seconds indefinitely. A successful handshake resets the delay.
         if (privateReconnectAttempts < 7) ++privateReconnectAttempts;
+#if defined(EASY_SETUP_MODE)
+        if (privateReconnectAttempts >= 3) easyVoiceError.store(true);
+#endif
         const unsigned long retryMs =
             min(300000UL, 5000UL << (privateReconnectAttempts - 1));
         webSocket.setReconnectInterval(retryMs);
@@ -389,7 +398,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);
 #if defined(INDEPENDENT_MODE)
+#if !defined(EASY_SETUP_MODE)
         privateReconnectAttempts = 0;
+#endif
         webSocket.setReconnectInterval(5000);
 #endif
         opusDecoder.resetState();
@@ -454,6 +465,11 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             Serial.println(msg);
 
             if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0) {
+#if defined(EASY_SETUP_MODE)
+                easyVoiceError.store(false);
+                privateReconnectAttempts = 0;
+                webSocket.setReconnectInterval(5000);
+#endif
                 Serial.println("Received RESPONSE.COMPLETE, draining speaker audio");
 
                 // Disarm the speaking watchdog immediately. A completion that
@@ -480,6 +496,9 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
                 responseDrainDeadline = millis() + 10000;
 #endif
             } else if (strcmp((char*)msg.c_str(), "RESPONSE.ERROR") == 0) {
+#if defined(EASY_SETUP_MODE)
+                easyVoiceError.store(true);
+#endif
                 Serial.println("Voice server reported RESPONSE.ERROR");
                 scheduleListeningRestart = false;
                 speakingStartTime = 0;
@@ -549,10 +568,24 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 // wifiTask -> WIFIMANAGER::loop() -> WIFIMANAGER::tryConnect() -> connectCb() -> websocketSetup()
 void websocketSetup(const String& server_domain, int port, const String& path)
 {
+#if defined(EASY_SETUP_MODE)
+    const auto &provider = getCardputerProviderConfig();
+    if (!cardputerProviderConfigured()) {
+        deviceState = WAITING;
+        return;
+    }
+    // Credentials travel in the TLS-protected Authorization header, never a URL.
+    const String headers =
+        "Authorization: Bearer " + provider.apiKey + "\r\n" +
+        "X-Voice-Provider: " + provider.provider + "\r\n" +
+        "X-Voice-Reference: " + provider.referenceId + "\r\n" +
+        "X-Voice-Name: " + provider.voice + "\r\n";
+#else
     const String headers =
         "Authorization: Bearer " + String(authTokenGlobal) + "\r\n" +
         "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
         "X-Device-Mac: " + WiFi.macAddress();
+#endif
 
     xSemaphoreTake(wsMutex, portMAX_DELAY);
 

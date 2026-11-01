@@ -1,179 +1,223 @@
-# Cardputer Voice — private first
+# Cardputer Voice — easy setup
 
-A personal voice service using your own Supabase project, Vercel deployment,
-and Google Gemini Live API project. It does not call ElatoAI's hosted service.
-The first version allows one owner and one enabled Cardputer. Public signup,
-payments, and shared community usage are intentionally outside this version.
+Use the Cardputer's keyboard to set up Wi-Fi and your own voice-provider key.
+The Easy edition uses the shared Cardputer Voice bridge, independently of
+ElatoAI's hosted service. You do not need your own Supabase project, Vercel
+deployment, ElatoAI account, or private firmware configuration file.
 
-Status: implemented and locally tested; cloud deployment and a real Gemini /
-Cardputer conversation still need to be verified with your accounts. The working
-ElatoAI-hosted firmware remains the default build.
+Status: the original private-owner Gemini/Cardputer path has been verified.
+The new Easy installation, provider entry, and cloned-voice adapters have local
+automated checks; the new Easy hardware setup path is still awaiting verification.
 
-## What runs where
+## Easy setup for your Cardputer
 
-- **Vercel:** private dashboard, API, and the Cardputer's WebSocket voice bridge.
-- **Supabase:** owner authentication, character settings, device credential hashes,
-  a small transcript history, and authoritative usage accounting.
-- **Gemini Live:** 16 kHz microphone input and spoken replies. Replies are encoded
-  to Opus as they arrive for the existing Cardputer audio driver.
+1. **Install the Easy edition.** Plug the original M5Stack Cardputer into a
+   computer using a USB-C data cable. Open the
+   [web installer](https://cardputer-voice.vercel.app/setup) in desktop Chrome or
+   Edge and follow its USB installation steps. This replaces the installed
+   firmware, including Launcher if present.
+2. **Connect Wi-Fi on the Cardputer.** Choose your 2.4 GHz network, type its
+   password, and press Enter. Use `;` / `.` to move through network choices, or
+   Tab to enter a network name manually.
+3. **Choose a provider.** Select Gemini, ElevenLabs, or Hume, and type your own
+   API key. The key is masked on-screen. ElevenLabs also asks for an existing
+   Agent ID; Hume asks for an existing Config ID. See the requirements below.
+4. **Finish setup and talk.** Press Enter through the remaining prompts. When
+   the Cardputer greets you and shows **LISTENING**, say a short sentence and
+   pause for the reply. Wait for LISTENING before speaking again.
 
-Vercel now supports WebSockets on all plans. Hobby connections have a five-minute
-function limit; this service caps sessions at four minutes and normally rotates
-between replies. Text history is restored on the next connection, although a
-short reconnect pause is expected. This is not a promise of seamless long calls.
-[Vercel WebSockets](https://vercel.com/docs/functions/websockets) ·
-[Hobby limits](https://vercel.com/docs/plans/hobby)
+Wi-Fi and provider settings stay saved for later boots. Hold **Fn + W for two
+seconds** to reopen setup. On the saved-Wi-Fi screen, press **Enter** to keep the
+network and change only the provider/key, or **Tab** to change Wi-Fi too.
+Backspace edits a field; **Ctrl + Backspace** clears it. G0 sleep/wake still works.
 
-## 1. Create your free accounts
+If keyboard Wi-Fi setup is unavailable, press Esc to use browser Wi-Fi setup:
+join **CARDPUTER-SETUP** from a phone or computer, then open
+`http://192.168.4.1/wifi` on that same device. Save the 2.4 GHz network using
+**Manual Connect**, then reset the Cardputer. Reopen setup with Fn + W to enter
+the provider details. Connecting a phone to the hotspot does not connect your
+computer to it.
 
-1. Create a **new Free Supabase project**. Keep its database password private.
-2. In Supabase **Authentication → Users**, create your own user with an email and
-   password and confirm the email. Disable new-user signups in Authentication
-   settings. The app also independently checks the configured owner email.
-3. In the SQL Editor, run [supabase/schema.sql](supabase/schema.sql). Run only this
-   schema in the new project, not the upstream demo migrations.
-4. Create a [Google AI Studio](https://aistudio.google.com/) API key in a project
-   on the **Free tier, with billing not enabled**. Check that its Live audio model
-   has available quota. Do not paste the key into chat or put it in the Cardputer.
-5. Use a personal, non-commercial **Vercel Hobby** project for the deployment.
+### What you need from your voice provider
 
-The app defaults to a 10-minute daily connection budget and one voice session at
-a time. This is our extra cap, not Google's promised allowance. Google's quotas
-can be lower and can change. There is no paid provider fallback. An app cannot
-make an already paid Google project free, so verify the Google project's tier.
+- **Gemini:** a [Google AI Studio](https://aistudio.google.com/) API key with
+  access and available quota for the service's supported Gemini Live model.
+  This option uses Gemini's built-in voice, not an uploaded voice clone.
+- **ElevenLabs:** your API key and an **Agent ID** from your ElevenLabs account.
+  Configure the agent's personality, first greeting, and desired voice there.
+  Set user input to **`pcm_16000`** and output to a **PCM** format, preferably
+  `pcm_24000`. You must enable **`agent_response_complete`** in the agent's
+  `client_events` configuration. The bridge waits for that event after the audio,
+  instead of treating the earlier text response as the end of speech.
+- **Hume:** your API key and an existing **EVI Config ID** from your Hume account.
+  Configure the desired voice there. The bridge handles 16 kHz microphone input
+  and converts Hume's returned mono PCM WAV audio for the Cardputer speaker.
 
-Google's free tier may use submitted content to improve its products. Supabase
-Free projects can pause after inactivity. Vercel Hobby is for personal,
-non-commercial use. Review the current terms before changing the audience or
-business model:
-[Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing) ·
-[Google quotas](https://ai.google.dev/gemini-api/docs/rate-limits) ·
-[Supabase pricing](https://supabase.com/pricing).
+For a cloned voice, create or select a clone supported by your provider account,
+attach it to the ElevenLabs agent or Hume configuration, and enter that existing
+ID on the Cardputer. This reuses the original ElatoAI provider integrations; it
+does not create a new voice-cloning engine or clone a voice inside Gemini Live.
 
-## 2. Deploy the website and voice bridge
+**Provider costs and permissions still apply.** A provider may require a paid
+plan for an agent, cloned voice, or API access. This service does not grant those
+features or guarantee that they are free. If using Gemini's Free tier, check
+your Google project's billing status and current quota; our cap is not Google's
+promised allowance. There is no automatic paid-provider fallback.
 
-In Vercel, import this GitHub repository and use the branch containing this
-directory (`codex/independent-cardputer` during the private preview).
+[ElevenLabs audio/event setup](https://elevenlabs.io/docs/eleven-agents/customization/events/client-events)
+· [ElevenLabs agent authentication](https://elevenlabs.io/docs/eleven-agents/customization/authentication)
+· [Hume EVI configurations](https://dev.hume.ai/voice/reference/speech-to-speech-evi/chat)
+· [Gemini quotas](https://ai.google.dev/gemini-api/docs/rate-limits)
 
-- Set **Root Directory** to `independent`.
-- Use the **Other** framework preset and Node.js **24 LTS**.
-- Use `npm ci` to install. This app has no frontend build step.
-- Add the environment variables listed in [.env.example](.env.example).
-- `APP_ORIGIN` must be the exact production origin, such as
-  `https://your-app.vercel.app`, with no path or trailing slash.
-- `OWNER_EMAIL` must match the Supabase user you created.
-- Keep `SUPABASE_SECRET_KEY` and `GEMINI_API_KEY` in server environment
-  settings. They are never sent to the browser or device.
-- Keep the Google project on Free, and keep Vercel/Supabase on their free plans.
+### Shared preview limits and privacy
 
-The required Supabase values are the project's URL, publishable key, and secret
-key. The publishable key handles password authentication; only the server uses
-the secret key. Copy them from **Settings → API Keys → Publishable and secret API
-keys**. Legacy `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` variable names
-remain accepted for compatibility, but new deployments should use the new keys.
+The shared Easy service has deliberately small limits:
 
-Deploy, then open your production URL. The setup screen lists missing variable
-names without revealing their values. If Vercel deployment protection applies
-to the production URL, configure access so the Cardputer can reach it: the voice
-endpoint performs its own device-token authentication. Preview sign-in protection
-cannot be completed by an ESP32.
+- **10 minutes per provider key per UTC day** (600 seconds).
+- **20 minutes total across all guests per UTC day** (1,200 seconds).
+- At most **100 accepted connection attempts per UTC day** across the service.
+- At most **two simultaneous sessions** overall, and one active session per key.
+- Each connection lasts at most **four minutes** (240 seconds), then reconnects
+  when allowance remains. A short reconnect pause is expected.
 
-The existing `vercel.json` routes the dashboard API and `/ws/esp32` to one Node
-HTTP server. No separate Cloudflare, Deno, Railway, or paid OpenAI service is
-required by this version.
+The budget counts connection time, including listening and silence. A normal
+disconnect refunds unused reserved seconds; failed or abandoned connections
+cannot bypass the cap. Accepted attempts are not refunded. Sleep/power off the
+Cardputer when you are finished. The service may be unavailable because a shared
+cap or a provider's own quota has been reached, even if your key still works.
 
-## 3. Set up your character and device
+Your provider key is saved in the Cardputer's NVS settings. The device sends it
+to the shared bridge over verified TLS; the bridge uses it in memory for that
+connection and authenticates with your chosen provider. The bridge does not
+store API keys in Supabase or print them in its logs. Supabase holds only key
+fingerprints, bounded usage counters, and session leases for guest
+accounting. Guest conversations/history are not saved by this bridge; the voice
+provider processes audio under its own terms.
 
-1. Sign into your dashboard with the Supabase owner email/password.
-2. Set the character name, instructions, voice, and speaker volume. Save them.
-3. Find your Cardputer's station Wi-Fi MAC address in its USB upload output or
-   your router's connected-device list. Use this Cardputer's address, not an
-   example from someone else's setup.
-4. Add the Cardputer in the dashboard. Save its random **device token**, which
-   is shown only once. The database stores a hash of the token.
+The private-owner dashboard is separate. Guests do not sign into it, receive
+owner access, or use the owner's Gemini key if their own key is missing or fails.
 
-The token authorizes just this device on your service. It is different from
-your Gemini key, Supabase key, password, and old ElatoAI token. Disable the device
-in the dashboard to revoke it. If you lose its token, disable that device entry
-and create a new one.
+### Optional: build the Easy firmware yourself
 
-## 4. Point the personal firmware at your deployment
+From `firmware-arduino`, using the Python/PlatformIO environment described in the
+[main installation guide](../README.md#cardputer-installation-and-setup):
 
-Copy `firmware-arduino/include/PersonalConfig.example.h` to
-`firmware-arduino/include/PersonalConfig.h`. Fill in:
+```powershell
+python -m platformio run -e m5stack-cardputer-easy
+python -m platformio device list
+python -m platformio run -e m5stack-cardputer-easy -t upload --upload-port COM3
+```
 
-- `CARDPUTER_SERVER_HOST`: your production hostname, without `https://` or a path.
-- `CARDPUTER_DEVICE_TOKEN`: the token issued in step 3.
-- `CARDPUTER_SERVER_CA_CERT`: the PEM certificate of a trusted CA for that host.
-  Use the deployment's valid issuing/root CA chain, not a placeholder or a leaf
-  certificate. HTTPS and WSS certificate verification stay enabled.
+Replace `COM3` with your device's port and close any serial monitor first. This
+target does not require `PersonalConfig.h` and contains no personal API key. Its
+application binary is `.pio/build/m5stack-cardputer-easy/firmware.bin`. Do not
+confuse it with a private-owner binary containing a device token. Launcher SD
+installation of this new Easy target still needs hardware verification.
 
-`PersonalConfig.h` is ignored by Git. This **personal binary embeds the device
-token**: keep it private. Do not upload it to a public release or Launcher catalog.
-A future public version needs interactive device pairing instead of a shared token.
+## Hosting the service / keeping the private-owner edition
 
-From `firmware-arduino`, using the Python/PlatformIO environment from the main
-installation guide, build and upload:
+The section below is for the person operating the bridge. Ordinary Easy users
+can stop after the setup steps above.
+
+### What runs where
+
+- **Vercel:** web installer, private dashboard/API, and WebSocket voice bridge.
+- **Supabase:** private-owner authentication/settings/history, plus separate
+  guest usage accounting that never stores guest provider keys or conversations.
+- **Voice provider:** Gemini Live, an existing ElevenLabs agent, or Hume EVI.
+  Provider replies become Opus packets for the existing Cardputer audio driver.
+
+The bridge caps connections at four minutes and normally rotates between replies
+before the host deadline. Private-owner Gemini sessions restore text history on
+reconnect; guest sessions do not persist history. Provider behavior and quotas
+still apply.
+[Vercel WebSockets](https://vercel.com/docs/functions/websockets)
+· [Vercel Hobby terms/limits](https://vercel.com/docs/plans/hobby)
+
+### 1. Prepare the operator accounts and database
+
+1. Use a Supabase project dedicated to this service. In **Authentication → Users**,
+   create and confirm the private owner's email/password user. Disable new-user
+   signup; Easy guests do not need Supabase Auth accounts.
+2. In Supabase's SQL Editor, apply **both** [supabase/schema.sql](supabase/schema.sql)
+   and [supabase/byok.sql](supabase/byok.sql). If the original private schema is
+   already installed, apply `byok.sql` alongside it. Both scripts are repeatable.
+   Do not apply the upstream ElatoAI demo migrations to this project.
+3. For private-owner Gemini voice, create a Google AI Studio API key and check
+   the project's tier/model quota. If keeping this project on Free, leave billing
+   disabled. The key belongs in server environment settings.
+4. Choose a hosting plan appropriate to the service's audience and use. Review
+   current [Vercel Hobby terms](https://vercel.com/docs/plans/hobby),
+   [Supabase limits](https://supabase.com/pricing), and
+   [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing) rather than
+   promising unlimited free public hosting.
+
+### 2. Configure and deploy your bridge
+
+Import this repository into Vercel, using the branch containing `independent`
+(`codex/independent-cardputer` during the preview).
+
+- Root Directory: **`independent`**; framework preset: **Other**; Node.js: **24 LTS**.
+- Install command: **`npm ci`**. There is no frontend build step.
+- Fill the operator values from [.env.example](.env.example) in Vercel.
+- `APP_ORIGIN` is the exact production HTTPS origin, with no path/trailing slash.
+- `OWNER_EMAIL` must match the private Supabase user. Keep
+  `SUPABASE_SECRET_KEY` and the operator `GEMINI_API_KEY` server-side.
+- Use the project's URL, publishable key, and secret key from Supabase
+  **Settings → API Keys**. Legacy anon/service-role variable names remain accepted.
+
+The shared public deployment is
+[`cardputer-voice.vercel.app`](https://cardputer-voice.vercel.app/setup).
+The generic Easy firmware's host and trusted CA live in
+[`PublicCardputerConfig.h`](../firmware-arduino/include/PublicCardputerConfig.h).
+If operating a different host, update its public hostname/valid CA and the
+installer artifacts for that deployment. Those public connection details are
+not user credentials.
+
+Production access must allow the Cardputer to reach `/ws/esp32` (private device
+token) and `/ws/byok` (the guest's own provider credential). Browser-only preview
+sign-in protection cannot be completed by an ESP32. The setup screen lists
+missing operator variable names without revealing their values.
+
+Guest limits are fixed in `src/byok-store.mjs` and `supabase/byok.sql`.
+`DAILY_VOICE_SECONDS` controls the **private owner's** daily budget, not the guest
+allowance. `SESSION_SECONDS` can shorten sessions but cannot exceed 240 seconds.
+
+### 3. Use the private-owner dashboard
+
+1. Sign into the dashboard with the Supabase owner's email/password.
+2. Save the character name, instructions, built-in Gemini voice, and volume.
+3. Add your Cardputer using its station Wi-Fi MAC from the USB upload output or
+   router's device list. Save the random device token shown once.
+4. Copy `firmware-arduino/include/PersonalConfig.example.h` to ignored
+   `PersonalConfig.h`, then fill your host, valid trusted CA, and that device token.
+5. Build/upload **`m5stack-cardputer-independent`** as described below.
 
 ```powershell
 python -m platformio run -e m5stack-cardputer-independent
-python -m platformio device list
 python -m platformio run -e m5stack-cardputer-independent -t upload --upload-port COM3
 ```
 
-Replace `COM3` with the Cardputer's port. Close any serial monitor first. This
-direct USB flash replaces the installed firmware/Launcher. A real deployment
-hostname, CA, and device token are required before flashing; placeholder builds
-are compilation checks only.
+This original private target remains available and always uses its own device
+token. The separate Easy target uses the guest's provider key. The private binary
+embeds a revocable device token and must remain private. Do not publish it in the Launcher
+catalog. To rotate its token, disable the old device in the owner dashboard,
+create another token, update the ignored header, and reflash.
 
-On first network setup:
+The private target uses the Cardputer's keyboard Wi-Fi setup too, with the browser
+hotspot as a fallback. Existing saved Wi-Fi is reused. Its provider credential
+still comes from the private header; the original ElatoAI token in NVS is not used.
 
-1. On your phone or computer, join **CARDPUTER-SETUP**. Stay connected if it says
-   there is no internet.
-2. Open `http://192.168.4.1/wifi` in the browser **on that same device**. Connecting
-   your phone does not connect your computer to the setup network.
-3. Choose **Manual Connect**, enter your **2.4 GHz** home Wi-Fi name and password,
-   then choose **Save Wi-Fi**. **Scan for Networks** is optional.
-4. Press **Reset on the Cardputer** so it connects to the saved network.
-5. Reconnect your phone or computer to your normal Wi-Fi. Wait for the Cardputer's
-   greeting and **LISTENING**, then speak.
+Private-owner usage is reserved before opening a provider connection. Normal
+disconnects refund unused time; abandoned reservations remain charged. The
+default private budget is 600 connected seconds/day and 240 seconds/session,
+with configured maxima of 1,800/day and 240/session. Private text history keeps
+the latest 200 messages. Raw microphone audio is not stored by this app.
 
-Saved networks are reused on later boots.
+## Local checks and verification
 
-Private mode takes its credential from `PersonalConfig.h`; an old ElatoAI token
-in NVS is not used. To rotate the personal token, update this header and reflash.
-Character changes apply on the next voice connection. G0 sleep/wake still works.
-
-## How the usage cap works
-
-- The daily budget counts **connected voice time**, including listening and
-  silence, not only the time the character speaks. It resets at midnight UTC.
-- Before starting Gemini, a transaction reserves at most one session's remaining
-  budget. Concurrent requests cannot both open a session for the owner.
-- A normal disconnect refunds unused reserved seconds. A crashed or abandoned
-  connection consumes its reservation so repeated failures cannot bypass the cap.
-- When the cap is exhausted, new voice connections are rejected before contacting
-  Gemini or loading conversation history. Repeated connection failures increase
-  the device's retry delay up to five minutes to reduce unnecessary free-tier
-  traffic. Power off/sleep the Cardputer when you are done talking.
-- Default limits are 600 seconds/day and 240 seconds/session. The private server
-  accepts at most 1,800 seconds/day and 240 seconds/session; provider limits still
-  apply. No automatic plan upgrade or provider fallback is implemented.
-
-Only text transcripts are stored, with the most recent 200 messages retained.
-Raw microphone audio is not stored by this app. Google still processes the audio
-under the terms of the Google project you use.
-
-## Local development and checks
-
-From `independent`:
-
-```bash
-npm ci
-```
-
-Copy `.env.example` to `.env`, fill it with your own test-project settings, and
-set `APP_ORIGIN=http://localhost:3000`. Then run:
+From `independent`, run `npm ci`. For local development, copy `.env.example` to
+`.env`, fill test-project values, and use `APP_ORIGIN=http://localhost:3000`.
 
 ```bash
 npm start
@@ -181,25 +225,24 @@ npm test
 npm run check
 ```
 
-Without cloud credentials, `npm start` still serves the setup-needed screen;
-authenticated APIs and voice connections remain unavailable. It listens only on
-loopback. Automated tests inject fake providers and do not consume AI quota.
-
-Tests include real embedded PostgreSQL execution of the schema/RLS/usage RPCs
-through PGlite, HTTP/WebSocket authentication, and real Opus WASM encode/decode.
-PGlite uses one database connection; a live cloud concurrency test is still needed.
+Without operator credentials, the setup-needed screen still loads, but voice
+connections and private APIs fail closed. Local development listens on loopback.
+Tests use fake providers and do not consume AI quota. They cover embedded
+PostgreSQL accounting/permissions, owner and guest authorization, audio ordering,
+provider formats, connection limits, cleanup, and real Opus WASM encoding.
 
 For browser QA, install Chrome or a Playwright browser and run `npm run test:ui`.
-The check uses an isolated browser with mock API responses, verifies desktop and
-mobile layouts, and saves screenshots under ignored `test-results/`.
+It uses mock API responses and writes screenshots to ignored `test-results/`.
 
-Before considering this live, verify with the actual accounts: owner login,
-device registration/revocation, one real spoken conversation, a reconnect with
-history, the usage cap, and TLS on the Cardputer. Cloud deployment, provider
-availability, and hardware behavior are not proven by local tests alone.
+Before marking the new Easy path hardware-verified, check a fresh installation,
+keyboard Wi-Fi/key entry, saved-Wi-Fi reuse, each provider with real account
+access, completion after the last audio packet, a reconnect, and allowance
+exhaustion. Passing local tests does not prove provider account access or a
+particular user's clone entitlement.
 
 ## Credits
 
-Based on the [ElatoAI](https://github.com/akdeb/ElatoAI) project and its Cardputer
-port. The default hosted edition remains available separately. See the root
-[LICENSE](../LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).
+Based on [ElatoAI](https://github.com/akdeb/ElatoAI), its Cardputer port, and its
+existing ElevenLabs/Hume connectors. The original ElatoAI-hosted edition remains
+available separately. See the root [LICENSE](../LICENSE) and
+[third-party notices](THIRD_PARTY_NOTICES.md).

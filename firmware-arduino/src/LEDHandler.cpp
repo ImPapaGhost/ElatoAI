@@ -3,6 +3,8 @@
 #if defined(ELATO_CARDPUTER)
 
 #include "Cardputer.h"
+#include "CardputerSetup.h"
+#include "Audio.h"
 #include <WiFi.h>
 
 namespace {
@@ -39,9 +41,21 @@ StatePresentation presentationFor(DeviceState state)
     case SETUP:
         return {"STARTING", "Initializing hardware", TFT_PURPLE, TFT_WHITE};
     case WAITING:
+#if defined(EASY_SETUP_MODE)
+        if (!cardputerProviderConfigured())
+            return {"SETUP NEEDED", "Hold Fn+W to enter your key", TFT_MAGENTA, TFT_WHITE};
+        if (cardputerProviderConnectionFailed())
+            return {"VOICE ERROR", "Check provider settings / quota", TFT_RED, TFT_WHITE};
+#endif
         return {"WAITING", "Connected", TFT_NAVY, TFT_WHITE};
     case IDLE:
     default:
+#if defined(EASY_SETUP_MODE)
+        if (!cardputerProviderConfigured())
+            return {"SETUP NEEDED", "Hold Fn+W to enter your key", TFT_MAGENTA, TFT_WHITE};
+        if (cardputerProviderConnectionFailed())
+            return {"VOICE ERROR", "Check provider settings / quota", TFT_RED, TFT_WHITE};
+#endif
 #if defined(INDEPENDENT_MODE)
         return {"READY", "Connecting to your server", TFT_GREEN, TFT_BLACK};
 #else
@@ -107,7 +121,7 @@ void drawCardputerStatus(DeviceState state)
 
     display.setTextDatum(bottom_center);
     display.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    display.drawString("Hold G0 to sleep", width / 2, display.height() - 2);
+    display.drawString("Hold G0: sleep  Fn+W: setup", width / 2, display.height() - 2);
     display.endWrite();
 }
 
@@ -125,6 +139,7 @@ void ledTask(void *parameter)
     (void)parameter;
     DeviceState lastState = static_cast<DeviceState>(-1);
     unsigned long authResetStarted = 0;
+    unsigned long setupShortcutStarted = 0;
 
     while (1)
     {
@@ -135,6 +150,29 @@ void ledTask(void *parameter)
         }
 
         const auto &keys = M5Cardputer.Keyboard.keysState();
+        if (keys.fn && (M5Cardputer.Keyboard.isKeyPressed('w') ||
+                        M5Cardputer.Keyboard.isKeyPressed('W')))
+        {
+            if (setupShortcutStarted == 0) setupShortcutStarted = millis();
+            else if (millis() - setupShortcutStarted >= 2000)
+            {
+                requestCardputerSetupOnNextBoot();
+                scheduleListeningRestart = false;
+                deviceState = WAITING;
+                xSemaphoreTake(wsMutex, portMAX_DELAY);
+                webSocket.disconnect();
+                xSemaphoreGive(wsMutex);
+                M5Cardputer.Display.fillScreen(TFT_BLACK);
+                M5Cardputer.Display.setTextDatum(middle_center);
+                M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+                M5Cardputer.Display.drawString("Opening setup...", M5Cardputer.Display.width() / 2,
+                                             M5Cardputer.Display.height() / 2);
+                delay(100);
+                ESP.restart();
+            }
+        }
+        else setupShortcutStarted = 0;
+
         if (keys.fn && (keys.backspace || keys.del))
         {
             if (authResetStarted == 0)

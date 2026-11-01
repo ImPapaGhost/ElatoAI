@@ -1,6 +1,6 @@
 {
   "name": "cardputer-voice-personal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,6 +11,7 @@
     "dev": "node --watch src/local.mjs",
     "test": "node --test",
     "test:ui": "node checks/dashboard.mjs",
+    "build:installer": "node checks/package-easy.mjs",
     "check": "node --check api/index.mjs && node --check src/server.mjs && node --check src/config.mjs && node --check public/app.js"
   },
   "dependencies": {
@@ -20,6 +21,8 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.14",
-    "@playwright/test": "1.64.1"
+    "@playwright/test": "1.64.1",
+    "esbuild": "0.25.11",
+    "esp-web-tools": "10.4.0"
   }
 }

@@ -23,11 +23,16 @@
 #endif
 
 #if defined(INDEPENDENT_MODE)
+#if defined(EASY_SETUP_MODE)
+// Shareable build: the user enters their own provider key on the Cardputer.
+#include "PublicCardputerConfig.h"
+#else
 // Local-only deployment host, trusted CA, and revocable device credential.
 // Copy include/PersonalConfig.example.h to include/PersonalConfig.h.
 #include "PersonalConfig.h"
 static_assert(sizeof(CARDPUTER_DEVICE_TOKEN) >= 44,
               "Set the device token issued by your private dashboard");
+#endif
 #endif
 
 // ---------- CHOOSE YOUR VOICE SERVER ----------

@@ -4,12 +4,26 @@ import { WebSocket, WebSocketServer } from "ws";
 import { readConfig, publicConfig, VOICES } from "./config.mjs";
 import { createStore, StoreError } from "./store.mjs";
 import { startVoiceSession } from "./voice.mjs";
+import { startAgentVoiceSession } from "./agent-voice.mjs";
+import { createByokStore } from "./byok-store.mjs";
+import { readByokHeaders } from "./byok-config.mjs";
 
 const STATIC_FILES = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/style.css", ["style.css", "text/css; charset=utf-8"]],
+  ["/setup", ["setup.html", "text/html; charset=utf-8"]],
+  ["/setup.html", ["setup.html", "text/html; charset=utf-8"]],
+  ["/setup.css", ["setup.css", "text/css; charset=utf-8"]],
+  ["/install-button.js", ["install-button.js", "text/javascript; charset=utf-8"]],
+  ["/installer-LICENSE.txt", ["installer-LICENSE.txt", "text/plain; charset=utf-8"]],
+  ["/firmware/manifest.json", ["firmware/manifest.json", "application/json"]],
+  ["/firmware/bootloader.bin", ["firmware/bootloader.bin", "application/octet-stream"]],
+  ["/firmware/partitions.bin", ["firmware/partitions.bin", "application/octet-stream"]],
+  ["/firmware/boot_app0.bin", ["firmware/boot_app0.bin", "application/octet-stream"]],
+  ["/firmware/cardputer-voice-easy.bin", ["firmware/cardputer-voice-easy.bin", "application/octet-stream"]],
+  ["/firmware/SHA256SUMS.txt", ["firmware/SHA256SUMS.txt", "text/plain; charset=utf-8"]],
 ]);
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
 
@@ -34,6 +48,9 @@ function route(req) {
   if (url.pathname === "/api/index" && url.searchParams.has("route")) {
     const name = url.searchParams.get("route");
     if (name === "voice") return "/ws/esp32";
+    if (name === "voice-byok") return "/ws/byok";
+    if (name === "public") return STATIC_FILES.has(url.searchParams.get("path"))
+      ? url.searchParams.get("path") : "/missing-public-file";
     const id = name === "devices" && url.searchParams.get("id");
     return `/api/${name}${id ? `/${id}` : ""}`;
   }
@@ -82,14 +99,17 @@ async function readJson(req) {
 
 function rejectUpgrade(socket, status) {
   if (socket.destroyed) return;
-  const reason = { 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 409: "Conflict", 429: "Too Many Requests", 503: "Service Unavailable" }[status] || "Service Unavailable";
+  const reason = { 400: "Bad Request", 401: "Unauthorized", 403: "Forbidden", 404: "Not Found", 409: "Conflict", 429: "Too Many Requests", 503: "Service Unavailable" }[status] || "Service Unavailable";
   socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 export function createAppServer(options = {}) {
   const config = options.config || readConfig();
   const store = options.store || createStore(config);
-  const voiceFactory = options.voiceFactory || startVoiceSession;
+  const voiceFactory = options.voiceFactory || (args =>
+    ['elevenlabs', 'hume'].includes(args.provider)
+      ? startAgentVoiceSession(args) : startVoiceSession(args));
+  let byokStore = options.byokStore;
   const sessions = new Map();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
 
@@ -209,6 +229,7 @@ export function createAppServer(options = {}) {
     // Node may emit socket errors while authentication is awaiting Supabase.
     socket.on("error", () => {});
     let lease;
+    let accounting = store;
     let settlementStarted = false;
     let settlementPromise;
     let accepted = false;
@@ -223,7 +244,7 @@ export function createAppServer(options = {}) {
       if (lease && !settlementStarted) {
         settlementStarted = true;
         settlementPromise = background((async () => {
-          try { await store.finishSession(lease.id, elapsedSeconds); }
+          try { await accounting.finishSession(lease.id, elapsedSeconds); }
           catch { console.error("Voice allowance settlement failed; the reserved limit remains charged."); }
         })());
       }
@@ -238,18 +259,29 @@ export function createAppServer(options = {}) {
     // is for canceled authentication and rejected/malformed upgrade requests.
     socket.once("close", () => { if (!accepted) void finish(); });
     (async () => {
-      if (route(req) !== "/ws/esp32") return reject(404);
+      const voiceRoute = route(req);
+      const isByok = voiceRoute === "/ws/byok";
+      if (voiceRoute !== "/ws/esp32" && !isByok) return reject(404);
       if (!config.configured) return reject(503);
-      const auth = req.headers.authorization || "";
-      if (!/^Bearer [A-Za-z0-9_-]{43,128}$/.test(auth)) return reject(401);
-      const token = auth.slice(7);
-      const mac = req.headers["x-device-mac"];
-      if (typeof mac !== "string" || !/^(?:[\da-f]{2}:){5}[\da-f]{2}$/i.test(mac)) return reject(401);
-      const device = await store.authenticateDevice(token, mac);
-      if (socket.destroyed) return finish();
-      lease = await store.reserveSession(device);
-      if (socket.destroyed) return finish();
-      const context = await store.getVoiceContext(device);
+      let device, context, token, mac, provider;
+      if (isByok) {
+        provider = readByokHeaders(req.headers);
+        byokStore ||= createByokStore(config);
+        accounting = byokStore;
+        lease = await accounting.reserveSession(provider.fingerprint);
+        context = provider.context;
+      } else {
+        const auth = req.headers.authorization || "";
+        if (!/^Bearer [A-Za-z0-9_-]{43,128}$/.test(auth)) return reject(401);
+        token = auth.slice(7);
+        mac = req.headers["x-device-mac"];
+        if (typeof mac !== "string" || !/^(?:[\da-f]{2}:){5}[\da-f]{2}$/i.test(mac)) return reject(401);
+        device = await store.authenticateDevice(token, mac);
+        if (socket.destroyed) return finish();
+        lease = await store.reserveSession(device);
+        if (socket.destroyed) return finish();
+        context = await store.getVoiceContext(device);
+      }
       if (socket.destroyed) return finish();
       wss.handleUpgrade(req, socket, head, ws => {
         accepted = true;
@@ -262,19 +294,22 @@ export function createAppServer(options = {}) {
         void background(Promise.resolve().then(() => voiceFactory({
           deviceSocket: ws,
           context,
-          apiKey: config.geminiApiKey,
+          provider: provider?.provider,
+          referenceId: provider?.referenceId,
+          apiKey: provider?.apiKey || config.geminiApiKey,
           model: config.model,
           maxSeconds: Math.min(config.sessionSeconds, lease.maxSeconds),
-          onTranscript: ({ role, content }) => background(store.appendTranscript(device.owner_id, device.id, role, content)),
+          onTranscript: ({ role, content }) => device
+            ? background(store.appendTranscript(device.owner_id, device.id, role, content)) : undefined,
           onEnd: finish,
         })).then(controller => {
           if (ws.readyState !== WebSocket.OPEN) return controller.close("device-disconnected");
-          sessions.set(ws, { controller, deviceId: device.id });
+          sessions.set(ws, { controller, deviceId: device?.id });
           // Revocation applies across instances too, within one polling window.
-          authTimer = setInterval(() => {
+          if (device) authTimer = setInterval(() => {
             void store.authenticateDevice(token, mac).catch(() => controller.close("device-revoked"));
           }, 30000);
-          authTimer.unref?.();
+          authTimer?.unref?.();
         }).catch(async () => {
           if (ws.readyState === WebSocket.OPEN) ws.close(1011, "Voice connection could not start");
           await finish({ elapsedSeconds: Math.ceil((Date.now() - startedAt) / 1000) });
