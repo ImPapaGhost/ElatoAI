@@ -22,10 +22,22 @@ export function readByokHeaders(headers) {
   }
   const voice = headers['x-voice-name'] || 'Aoede';
   if (!VOICES.includes(voice)) throw new StoreError(400, 'Choose a supported Gemini voice.');
+  const idleSeconds = headers['x-voice-idle-seconds'];
+  const resumeHandle = headers['x-voice-resume'];
+  let sessionControl;
+  if (idleSeconds !== undefined || resumeHandle !== undefined) {
+    if (provider !== 'gemini' || !['60', '120', '300'].includes(idleSeconds) ||
+        (resumeHandle !== undefined && (typeof resumeHandle !== 'string' ||
+          !/^[\x21-\x7e]{1,2048}$/.test(resumeHandle)))) {
+      throw new StoreError(400, 'Invalid voice standby settings.');
+    }
+    sessionControl = { idleSeconds: Number(idleSeconds), ...(resumeHandle ? { resumeHandle } : {}) };
+  }
   return {
     provider, apiKey, referenceId,
     fingerprint: createHash('sha256').update(`${provider}\0${apiKey}`).digest('hex'),
     context: {
+      ...(sessionControl ? { sessionControl } : {}),
       providerManagedPersona: provider !== 'gemini',
       settings: {
         character_name: 'Cardputer', voice_name: voice, volume: 70,

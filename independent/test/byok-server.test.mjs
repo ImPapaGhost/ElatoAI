@@ -78,6 +78,19 @@ test('ElevenLabs and Hume use the selected existing agent/config ID', async t =>
   }
 });
 
+test('Gemini standby capability and resume handle reach the bridge without entering accounting or history', async t => {
+  const { base, calls, settled } = await fixture(t);
+  const ws = new WebSocket(`${base}/ws/byok`, { headers: {
+    ...headers, 'X-Voice-Idle-Seconds': '60', 'X-Voice-Resume': 'test-resume-handle',
+  } });
+  await once(ws, 'message');
+  assert.deepEqual(calls.voice[0].context.sessionControl, { idleSeconds: 60, resumeHandle: 'test-resume-handle' });
+  assert.deepEqual(calls.voice[0].context.history, []);
+  assert.match(calls.reservations[0], /^[a-f0-9]{64}$/);
+  ws.close();
+  await settled;
+});
+
 test('missing provider keys are rejected before any reservation or private-key fallback', async t => {
   const { base, calls } = await fixture(t);
   const ws = new WebSocket(`${base}/ws/byok`, { headers: { 'X-Voice-Provider': 'gemini' } });

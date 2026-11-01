@@ -6,8 +6,8 @@ The Easy edition uses the shared Cardputer Voice bridge, independently of
 ElatoAI's hosted service. You do not need your own Supabase project, Vercel
 deployment, ElatoAI account, or private firmware configuration file.
 
-Status: the original private-owner Gemini/Cardputer path and USB 0.2.2 setup
-protocol have been checked on an original Cardputer. Wireless settings in 0.3
+Status: Gemini voice, one-minute standby, Enter wake with remembered context,
+and USB setup have been checked on an original Cardputer. Wireless settings in 0.3
 have automated cryptography/UI checks; physical Wi-Fi validation is still pending.
 Cloned-voice access also depends on the real provider account/configuration.
 
@@ -36,6 +36,20 @@ Wi-Fi and provider settings stay saved for later boots. Open the computer's
 **Fn + W for two seconds** to reopen setup. On the saved-Wi-Fi screen, press **Enter** to keep the
 network and change only the provider/key, or **Tab** to change Wi-Fi too.
 Backspace edits a field; **Ctrl + Backspace** clears it. G0 sleep/wake still works.
+
+### Gemini standby and conversation resume (0.4)
+
+After one minute without recognized speech, the Cardputer shows **STANDBY**.
+The microphone and both voice connections stop, so an unattended device no
+longer streams silence or keeps the voice server running. Wi-Fi stays connected.
+Press a fresh **Enter** to reconnect and continue speaking.
+
+Gemini session resumption can retain the conversation for up to two hours after
+disconnecting. The Cardputer keeps only a bounded session handle in RAM; this
+bridge does not save guest transcripts in Supabase. Rebooting, changing provider
+settings, or an expired/unavailable session starts a fresh conversation. This
+standby/resume feature currently applies to Gemini. G0 deep sleep is separate
+and restarts the device when it wakes.
 
 ### Optional: change provider settings over Wi-Fi (0.3 preview)
 
@@ -134,8 +148,9 @@ to the shared bridge over verified TLS; the bridge uses it in memory for that
 connection and authenticates with your chosen provider. The bridge does not
 store API keys in Supabase or print them in its logs. Supabase holds only key
 fingerprints and session/usage metadata for coordinating guest connections.
-Guest conversations/history are not saved by this bridge; the voice
-provider processes audio under its own terms.
+Guest conversations/history are not saved by this bridge. Gemini resumption
+uses a short-lived provider session handle kept in device RAM; the voice
+provider processes audio and retains session state under its own terms.
 
 The private-owner dashboard is separate. Guests do not sign into it, receive
 owner access, or use the owner's Gemini key if their own key is missing or fails.

@@ -41,6 +41,8 @@ StatePresentation presentationFor(DeviceState state)
         return {"RESETTING", "Restoring defaults", TFT_RED, TFT_WHITE};
     case SLEEP:
         return {"SLEEPING", "Press G0 to wake", TFT_DARKGREY, TFT_WHITE};
+    case STANDBY:
+        return {"STANDBY", "Press Enter to continue", TFT_DARKGREY, TFT_WHITE};
     case SETUP:
         return {"STARTING", "Initializing hardware", TFT_PURPLE, TFT_WHITE};
     case WAITING:
@@ -143,6 +145,10 @@ void ledTask(void *parameter)
     DeviceState lastState = static_cast<DeviceState>(-1);
     unsigned long authResetStarted = 0;
     unsigned long setupShortcutStarted = 0;
+#if defined(EASY_SETUP_MODE)
+    bool standbyWasActive = false;
+    bool enterWakeArmed = false;
+#endif
 
     while (1)
     {
@@ -161,6 +167,18 @@ void ledTask(void *parameter)
         }
 
         const auto &keys = M5Cardputer.Keyboard.keysState();
+#if defined(EASY_SETUP_MODE)
+        const bool inStandby = cardputerVoiceInStandby();
+        if (inStandby) {
+            if (!standbyWasActive) enterWakeArmed = !keys.enter;
+            if (!keys.enter) enterWakeArmed = true;
+            else if (enterWakeArmed && !keys.fn) {
+                enterWakeArmed = false;
+                requestCardputerVoiceWake();
+            }
+        } else enterWakeArmed = false;
+        standbyWasActive = inStandby;
+#endif
         if (openSetupFromUsb || (keys.fn && (M5Cardputer.Keyboard.isKeyPressed('w') ||
                         M5Cardputer.Keyboard.isKeyPressed('W'))))
         {

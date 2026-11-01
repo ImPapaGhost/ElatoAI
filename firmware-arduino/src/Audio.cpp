@@ -4,8 +4,81 @@
 #if defined(EASY_SETUP_MODE)
 #include "CardputerSetup.h"
 #include <atomic>
+#include <mbedtls/sha256.h>
 static std::atomic<bool> easyVoiceError{false};
+static std::atomic<bool> easyStandby{false};
+static std::atomic<bool> easyStandbyRequested{false};
+static std::atomic<bool> easyWakeRequested{false};
+static std::atomic<bool> easyConnectionSetupRequested{false};
+static bool easyResumeListeningRequested = false;
+static bool easyCompletedReply = false;
+static bool easyIdleEnabled = false;
+static bool easyActivityClockStarted = false;
+static unsigned long easyLastActivityAt = 0;
+static unsigned long easyReconnectAt = 0;
+constexpr size_t EASY_RESUME_MAX_LENGTH = 2048;
+constexpr unsigned long EASY_RESUME_EXPIRY_MS = 2UL * 60 * 60 * 1000;
+// Opaque provider state is bounded, RAM-only, and never written to Serial/NVS.
+static char easyResumeHandle[EASY_RESUME_MAX_LENGTH + 1] = {};
+static bool easyResumePaused = false;
+static unsigned long easyResumePausedAt = 0;
+static uint8_t easyProviderFingerprint[32] = {};
+static bool easyProviderFingerprintSet = false;
 bool cardputerProviderConnectionFailed() { return easyVoiceError.load(); }
+bool cardputerVoiceInStandby() { return easyStandby.load() || easyStandbyRequested.load(); }
+void requestCardputerVoiceWake() {
+    if (cardputerVoiceInStandby()) easyWakeRequested.store(true);
+}
+
+static void clearEasyResumeHandle() {
+    memset(easyResumeHandle, 0, sizeof(easyResumeHandle));
+    easyResumePaused = false;
+    easyResumePausedAt = 0;
+}
+
+static void pauseEasyResumeHandle() {
+    if (easyResumeHandle[0] && !easyResumePaused) {
+        easyResumePaused = true;
+        easyResumePausedAt = millis();
+    }
+}
+
+static void updateEasyResumeHandle(JsonVariantConst value) {
+    if (!value.is<const char *>()) { clearEasyResumeHandle(); return; }
+    const JsonString handle = value.as<JsonString>();
+    const size_t length = handle.size();
+    if (length == 0 || length > EASY_RESUME_MAX_LENGTH) { clearEasyResumeHandle(); return; }
+    for (size_t index = 0; index < length; ++index) {
+        const uint8_t c = static_cast<uint8_t>(handle.c_str()[index]);
+        if (c < 33 || c > 126) { clearEasyResumeHandle(); return; }
+    }
+    clearEasyResumeHandle();
+    memcpy(easyResumeHandle, handle.c_str(), length);
+}
+
+static void checkEasyResumeProvider(const CardputerProviderConfig &provider) {
+    uint8_t fingerprint[32] = {};
+    const uint8_t separator = 0;
+    const String *fields[] = {&provider.provider, &provider.apiKey, &provider.referenceId, &provider.voice};
+    mbedtls_sha256_context context;
+    mbedtls_sha256_init(&context);
+    bool valid = mbedtls_sha256_starts_ret(&context, 0) == 0;
+    for (const String *field : fields) {
+        if (valid) valid = mbedtls_sha256_update_ret(&context,
+            reinterpret_cast<const uint8_t *>(field->c_str()), field->length()) == 0 &&
+            mbedtls_sha256_update_ret(&context, &separator, 1) == 0;
+    }
+    if (valid) valid = mbedtls_sha256_finish_ret(&context, fingerprint) == 0;
+    mbedtls_sha256_free(&context);
+    if (!valid || (easyProviderFingerprintSet &&
+        memcmp(fingerprint, easyProviderFingerprint, sizeof(fingerprint)) != 0)) {
+        clearEasyResumeHandle();
+    }
+    if (valid) memcpy(easyProviderFingerprint, fingerprint, sizeof(fingerprint));
+    easyProviderFingerprintSet = valid;
+    if (easyResumePaused && millis() - easyResumePausedAt >= EASY_RESUME_EXPIRY_MS)
+        clearEasyResumeHandle();
+}
 #endif
 #include "PitchShift.h"
 #if defined(ELATO_CARDPUTER)
@@ -178,6 +251,13 @@ void transitionToListening() {
     Serial.println("Transitioned to listening mode");
 
     deviceState = LISTENING;
+#if defined(EASY_SETUP_MODE)
+    if (easyCompletedReply || !easyActivityClockStarted) {
+        easyLastActivityAt = millis();
+        easyActivityClockStarted = true;
+    }
+    easyCompletedReply = false;
+#endif
     speakingStartTime = 0;
     lastResponseActivityTime = 0;
     // webSocket.disableHeartbeat();
@@ -379,10 +459,15 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     {
     case WStype_DISCONNECTED:
         Serial.printf("[WSc] Disconnected!\n");
+#if defined(EASY_SETUP_MODE)
+        pauseEasyResumeHandle();
+        easyResumeListeningRequested = false;
+        easyCompletedReply = false;
+        if (!easyStandby.load()) {
+#endif
 #if defined(INDEPENDENT_MODE)
         {
-        // A used-up daily allowance should not poll the free backend every
-        // five seconds indefinitely. A successful handshake resets the delay.
+        // Provider/network failures should not poll the backend indefinitely.
         if (privateReconnectAttempts < 7) ++privateReconnectAttempts;
 #if defined(EASY_SETUP_MODE)
         if (privateReconnectAttempts >= 3) easyVoiceError.store(true);
@@ -390,13 +475,24 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         const unsigned long retryMs =
             min(300000UL, 5000UL << (privateReconnectAttempts - 1));
         webSocket.setReconnectInterval(retryMs);
+#if defined(EASY_SETUP_MODE)
+        easyReconnectAt = millis() + retryMs;
+        easyConnectionSetupRequested.store(true);
+#endif
         Serial.printf("Private server retry in %lu seconds\n", retryMs / 1000);
+        }
+#endif
+#if defined(EASY_SETUP_MODE)
         }
 #endif
         scheduleListeningRestart = false;
         speakingStartTime = 0;
         lastResponseActivityTime = 0;
+#if defined(EASY_SETUP_MODE)
+        deviceState = easyStandby.load() ? STANDBY : IDLE;
+#else
         deviceState = IDLE;
+#endif
 #if defined(ELATO_CARDPUTER)
         responseDrainDeadline = 0;
         i2sInputFlushScheduled = true;
@@ -419,10 +515,8 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_TEXT:
     {
-        Serial.printf("[WSc] get text: %s\n", payload);
-
         JsonDocument doc;
-        DeserializationError error = deserializeJson(doc, (char *)payload);
+        DeserializationError error = deserializeJson(doc, payload, length);
 
         if (error)
         {
@@ -431,10 +525,20 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
             return;
         }
 
-        String type = doc["type"];
+        const char *type = doc["type"] | "";
+#if defined(EASY_SETUP_MODE)
+        // Consume opaque session state BEFORE logging any text payload. Even
+        // malformed session controls must never echo a resume credential.
+        if (strcmp(type, "session") == 0 || !doc["resume_handle"].isNull()) {
+            if (strcmp(type, "session") == 0 && easyIdleEnabled)
+                updateEasyResumeHandle(doc["resume_handle"]);
+            return;
+        }
+#endif
+        Serial.printf("[WSc] get text: %s\n", payload);
 
         // auth messages
-        if (strcmp((char*)type.c_str(), "auth") == 0) {
+        if (strcmp(type, "auth") == 0) {
             deviceState = WAITING;
             currentVolume = doc["volume_control"].as<int>();
             currentPitchFactor = doc["pitch_factor"].as<float>();
@@ -469,12 +573,36 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         }
 
         // oai messages
-        if (strcmp((char*)type.c_str(), "server") == 0) {
+        if (strcmp(type, "server") == 0) {
             String msg = doc["msg"];
             Serial.println(msg);
 
+#if defined(EASY_SETUP_MODE)
+            if (easyIdleEnabled && msg == "SESSION.IDLE") {
+                easyStandbyRequested.store(true);
+                deviceState = STANDBY;
+                return;
+            }
+            if (easyIdleEnabled && msg == "SESSION.RESUMED") {
+                easyVoiceError.store(false);
+                privateReconnectAttempts = 0;
+                webSocket.setReconnectInterval(5000);
+                easyResumePaused = false;
+                // Hardware handoff happens on the next network-task tick,
+                // outside the WebSocket event callback, preserving activity.
+                easyResumeListeningRequested = true;
+                return;
+            }
+            if (easyIdleEnabled && msg == "USER.ACTIVITY") {
+                easyLastActivityAt = millis();
+                easyActivityClockStarted = true;
+                return;
+            }
+#endif
+
             if (strcmp((char*)msg.c_str(), "RESPONSE.COMPLETE") == 0) {
 #if defined(EASY_SETUP_MODE)
+                easyCompletedReply = true;
                 easyVoiceError.store(false);
                 privateReconnectAttempts = 0;
                 webSocket.setReconnectInterval(5000);
@@ -562,7 +690,11 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
       }
     case WStype_ERROR:
+#if defined(EASY_SETUP_MODE)
+        Serial.println("[WSc] Connection error");
+#else
         Serial.printf("[WSc] Error: %s\n", payload);    
+#endif
         break;
     case WStype_FRAGMENT_TEXT_START:
     case WStype_FRAGMENT_BIN_START:
@@ -578,26 +710,53 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
 void websocketSetup(const String& server_domain, int port, const String& path)
 {
 #if defined(EASY_SETUP_MODE)
+    if (easyStandby.load() || easyStandbyRequested.load()) return;
+    if (xTaskGetCurrentTaskHandle() != networkTaskHandle) {
+        easyConnectionSetupRequested.store(true);
+        return;
+    }
+#endif
+    xSemaphoreTake(wsMutex, portMAX_DELAY);
+#if defined(EASY_SETUP_MODE)
+    if (webSocket.isConnected()) {
+        easyConnectionSetupRequested.store(false);
+        xSemaphoreGive(wsMutex);
+        return;
+    }
+    // begin() overwrites the client's pointers. Clean up an old/half-open TLS
+    // client first, then discard any reconnect request raised by its callback.
+    webSocket.disconnect();
+    easyConnectionSetupRequested.store(false);
     const auto &provider = getCardputerProviderConfig();
     if (!cardputerProviderConfigured()) {
         deviceState = WAITING;
+        xSemaphoreGive(wsMutex);
         return;
     }
+    checkEasyResumeProvider(provider);
+    easyIdleEnabled = provider.provider == "gemini";
+    if (!easyIdleEnabled) clearEasyResumeHandle();
+    if (!easyActivityClockStarted) {
+        easyLastActivityAt = millis();
+        easyActivityClockStarted = true;
+    }
     // Credentials travel in the TLS-protected Authorization header, never a URL.
-    const String headers =
+    String headers =
         "Authorization: Bearer " + provider.apiKey + "\r\n" +
         "X-Voice-Provider: " + provider.provider + "\r\n" +
         "X-Voice-Reference: " + provider.referenceId + "\r\n" +
         // The client adds the line ending and its User-Agent header itself.
         "X-Voice-Name: " + provider.voice;
+    if (easyIdleEnabled) {
+        headers += "\r\nX-Voice-Idle-Seconds: " + String(CARDPUTER_VOICE_IDLE_SECONDS);
+        if (easyResumeHandle[0]) headers += "\r\nX-Voice-Resume: " + String(easyResumeHandle);
+    }
 #else
     const String headers =
         "Authorization: Bearer " + String(authTokenGlobal) + "\r\n" +
         "X-Wifi-Rssi: " + String(WiFi.RSSI()) + "\r\n" +
         "X-Device-Mac: " + WiFi.macAddress();
 #endif
-
-    xSemaphoreTake(wsMutex, portMAX_DELAY);
 
     webSocket.setExtraHeaders(headers.c_str());
     webSocket.onEvent(webSocketEvent);
@@ -622,7 +781,69 @@ void websocketSetup(const String& server_domain, int port, const String& path)
 // networkTask -> webSocket.loop()
 void networkTask(void *parameter) {
     while (1) {
+#if defined(EASY_SETUP_MODE)
+        bool configureConnection = false;
+#endif
         xSemaphoreTake(wsMutex, portMAX_DELAY);
+
+#if defined(EASY_SETUP_MODE)
+        if (easyIdleEnabled && !easyStandby.load() && deviceState == LISTENING &&
+            easyActivityClockStarted &&
+            millis() - easyLastActivityAt >= CARDPUTER_VOICE_IDLE_SECONDS * 1000UL) {
+            easyStandbyRequested.store(true);
+        }
+        if (easyStandbyRequested.exchange(false)) {
+            easyStandby.store(true);
+            pauseEasyResumeHandle();
+            easyConnectionSetupRequested.store(false);
+            easyResumeListeningRequested = false;
+            easyCompletedReply = false;
+            scheduleListeningRestart = false;
+            speakingStartTime = 0;
+            lastResponseActivityTime = 0;
+            responseDrainDeadline = 0;
+            deviceState = STANDBY;
+            i2sInputFlushScheduled = true;
+            i2sOutputFlushScheduled = true;
+            stopCardputerAudio();
+            webSocket.disconnect();
+            webSocket.setExtraHeaders("");
+            Serial.println("Voice standby; press Enter to continue");
+        }
+        if (easyStandby.load() && easyWakeRequested.exchange(false)) {
+            easyStandby.store(false);
+            easyLastActivityAt = millis();
+            easyActivityClockStarted = true;
+            easyVoiceError.store(false);
+            privateReconnectAttempts = 0;
+            easyReconnectAt = 0;
+            easyConnectionSetupRequested.store(true);
+            deviceState = IDLE;
+        }
+        if (easyStandby.load()) {
+            // disconnect() alone does not disable this library's retries.
+            // Never call loop() here, including after a Wi-Fi reconnect.
+            deviceState = STANDBY;
+            if (easyResumePaused && millis() - easyResumePausedAt >= EASY_RESUME_EXPIRY_MS)
+                clearEasyResumeHandle();
+            xSemaphoreGive(wsMutex);
+            vTaskDelay(1);
+            continue;
+        }
+        if (easyConnectionSetupRequested.load()) {
+            configureConnection = WiFi.status() == WL_CONNECTED &&
+                (easyReconnectAt == 0 || static_cast<int32_t>(millis() - easyReconnectAt) >= 0);
+            xSemaphoreGive(wsMutex);
+            // websocketSetup takes wsMutex itself; never call it while held.
+            if (configureConnection) websocketSetup(ws_server, ws_port, ws_path);
+            vTaskDelay(1);
+            continue;
+        }
+        if (easyResumeListeningRequested) {
+            easyResumeListeningRequested = false;
+            if (webSocket.isConnected()) transitionToListening();
+        }
+#endif
 
         // Check to see if a transition to listening mode is scheduled.
         if (scheduleListeningRestart && millis() >= scheduledTime) {

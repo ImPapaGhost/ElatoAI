@@ -497,3 +497,248 @@ test('session limit cannot exceed the private bridge maximum', async () => {
   await assert.rejects(h.start(), /Invalid voice session configuration/);
   assert.equal(h.calls.connect.length, 0);
 });
+
+test('legacy sessions do not enable standby, native resumption, or activity controls', async (t) => {
+  const h = setup();
+  const controller = await h.start();
+  t.after(() => controller.close());
+  assert.equal(h.calls.connect[0].config.sessionResumption, undefined);
+  assert.equal(h.calls.connect[0].config.contextWindowCompression, undefined);
+  greeting(h);
+  h.socket.emit('message', Buffer.alloc(640), true);
+  h.emit({ sessionResumptionUpdate: { resumable: true, newHandle: 'provider-checkpoint' },
+    serverContent: { inputTranscription: { text: 'Hello' } } });
+  h.clock.advance(61_000);
+  assert.equal(h.ends.length, 0);
+  assert.ok(!h.controls().includes('session'));
+  assert.ok(!h.controls().includes('USER.ACTIVITY'));
+  assert.ok(!h.controls().includes('SESSION.IDLE'));
+});
+
+test('standby starts after actual playback drain and silence PCM cannot reset its deadline', async () => {
+  const h = setup({ options: { maxSeconds: 240 } });
+  h.opts.context.sessionControl = { idleSeconds: 60 };
+  await h.start();
+  greeting(h);
+  h.clock.advance(65_000);
+  assert.equal(h.ends.length, 0, 'model completion alone does not prove playback has drained');
+  h.socket.emit('message', Buffer.alloc(640), true);
+  for (let index = 0; index < 11; index += 1) {
+    h.clock.advance(5000);
+    h.socket.emit('message', Buffer.alloc(640), true);
+  }
+  h.clock.advance(4999);
+  assert.equal(h.ends.length, 0);
+  h.clock.advance(1);
+  assert.deepEqual(h.ends, [{ elapsedSeconds: 125, reason: 'idle_standby' }]);
+  assert.equal(h.controls().at(-1), 'SESSION.IDLE');
+  assert.ok(!h.controls().includes('SESSION.END'));
+  assert.equal(h.calls.providerClose, 1);
+  assert.equal(h.calls.codecClose, 1);
+  assert.equal(h.clock.timers.size, 0);
+  const writes = h.socket.sent.length;
+  h.emit({ sessionResumptionUpdate: { resumable: true, newHandle: 'too-late' } });
+  h.clock.advance(300_000);
+  assert.equal(h.socket.sent.length, writes);
+  assert.equal(h.ends.length, 1);
+});
+
+test('meaningful partial transcripts reset standby and activity messages are throttled', async () => {
+  const h = setup({ options: { maxSeconds: 240 } });
+  h.opts.context.sessionControl = { idleSeconds: 60 };
+  await h.start();
+  greeting(h);
+  h.socket.emit('message', Buffer.alloc(640), true);
+  h.clock.advance(59_000);
+  h.emit({ serverContent: { inputTranscription: { text: '   ' } } });
+  assert.ok(!h.controls().includes('USER.ACTIVITY'));
+  h.emit({ serverContent: { inputTranscription: { text: 'Tell me' } } });
+  h.emit({ serverContent: { inputTranscription: { text: ' something' } } });
+  assert.equal(h.controls().filter(value => value === 'USER.ACTIVITY').length, 1);
+  h.clock.advance(1000);
+  h.emit({ serverContent: { inputTranscription: { text: ' interesting.' } } });
+  assert.equal(h.controls().filter(value => value === 'USER.ACTIVITY').length, 2);
+  h.clock.advance(59_999);
+  assert.equal(h.ends.length, 0);
+  h.clock.advance(1);
+  assert.equal(h.ends[0].reason, 'idle_standby');
+});
+
+test('model output disarms standby throughout a long response and a new drain', async () => {
+  const h = setup({ options: { maxSeconds: 240 } });
+  h.opts.context.sessionControl = { idleSeconds: 60 };
+  await h.start();
+  greeting(h);
+  h.socket.emit('message', Buffer.alloc(640), true);
+  h.clock.advance(59_000);
+  h.emit(audioContent());
+  for (let index = 0; index < 3; index += 1) {
+    h.clock.advance(20_000);
+    h.emit(audioContent());
+  }
+  assert.equal(h.ends.length, 0);
+  h.emit({ serverContent: { turnComplete: true } });
+  h.clock.advance(61_000);
+  assert.equal(h.ends.length, 0, 'a second long drain also must not idle-close');
+  h.socket.emit('message', Buffer.alloc(640), true);
+  h.clock.advance(44_999);
+  assert.equal(h.ends.length, 0);
+  // The existing hosting rotation at 225s still takes precedence over standby.
+  h.clock.advance(1);
+  assert.equal(h.ends[0].reason, 'session_rotation');
+  assert.ok(!h.controls().includes('SESSION.IDLE'));
+});
+
+test('opt-in checkpoint updates are bounded, deduplicated, and conservatively cleared', async (t) => {
+  const h = setup();
+  h.opts.context.sessionControl = { idleSeconds: 60 };
+  const controller = await h.start();
+  t.after(() => controller.close());
+  assert.deepEqual(h.calls.connect[0].config.sessionResumption, {});
+  assert.deepEqual(h.calls.connect[0].config.contextWindowCompression, { slidingWindow: {} });
+  const update = (resumable, newHandle) => h.emit({ sessionResumptionUpdate: { resumable, newHandle } });
+  update(true, 'checkpoint-1');
+  update(true, 'checkpoint-1');
+  update(false, '');
+  for (const invalid of ['has space', '\n', 'unicode-\u2603', 'x'.repeat(2049), null]) update(true, invalid);
+  update(false, '');
+  assert.deepEqual(h.socket.sent.filter(value => value.type === 'session'), [
+    { type: 'session', resume_handle: 'checkpoint-1' }, { type: 'session', resume_handle: '' },
+  ]);
+  update(true, 'z'.repeat(2048));
+  assert.equal(h.socket.sent.at(-1).resume_handle.length, 2048);
+  assert.equal(h.ends.length, 0, 'invalid optional metadata does not break audio');
+});
+
+test('native resume waits for accepted setup and restores listening without a greeting', async (t) => {
+  const connecting = deferred();
+  const h = setup({ beforeConnectReturns: () => connecting.promise });
+  h.opts.context.sessionControl = { idleSeconds: 60, resumeHandle: 'saved-checkpoint' };
+  h.opts.context.history = [{ role: 'user', content: 'Earlier conversation.' }];
+  const starting = h.start();
+  await settle();
+  assert.deepEqual(h.controls(), ['auth']);
+  assert.equal(h.calls.content.length, 0);
+  connecting.resolve();
+  const controller = await starting;
+  t.after(() => controller.close());
+  assert.deepEqual(h.calls.connect[0].config.sessionResumption, { handle: 'saved-checkpoint' });
+  assert.equal(h.controls().at(-1), 'SESSION.RESUMED');
+  assert.equal(h.calls.content.length, 0, 'do not replay text or add a synthetic greeting');
+  assert.ok(!h.controls().includes('RESPONSE.COMPLETE'));
+  assert.ok(!h.controls().includes('USER.ACTIVITY'));
+  h.clock.advance(31_000);
+  assert.equal(h.ends.length, 0, 'resume does not arm a greeting response watchdog');
+  h.socket.emit('message', Buffer.alloc(640), true);
+  assert.equal(h.calls.input.length, 1);
+});
+
+test('queued resumed audio follows SESSION.RESUMED without being switched back to listening', async (t) => {
+  const h = setup({ beforeConnectReturns(config) {
+    config.callbacks.onmessage({ setupComplete: {} });
+    config.callbacks.onmessage(audioContent());
+  } });
+  h.opts.context.sessionControl = { idleSeconds: 60, resumeHandle: 'saved-checkpoint' };
+  const controller = await h.start();
+  t.after(() => controller.close());
+  assert.deepEqual(h.controls(), ['auth', 'SESSION.RESUMED', 'RESPONSE.CREATED']);
+  assert.equal(h.calls.content.length, 0);
+  h.socket.emit('message', Buffer.alloc(640), true);
+  assert.equal(h.calls.input.length, 0);
+});
+
+test('an explicitly expired checkpoint retries fresh once and ignores obsolete callbacks', async (t) => {
+  const h = setup();
+  h.opts.context.sessionControl = { idleSeconds: 60, resumeHandle: 'expired-checkpoint' };
+  const late = deferred();
+  const attempts = [];
+  let lateCloses = 0;
+  let freshCloses = 0;
+  const fresh = {
+    sendClientContent: value => h.calls.content.push(value),
+    sendRealtimeInput: value => h.calls.input.push(value),
+    close() { freshCloses += 1; attempts[1].callbacks.onclose({ code: 1000 }); },
+  };
+  h.opts.createGeminiClient = async () => ({ live: { connect(config) {
+    attempts.push(config);
+    if (attempts.length === 1) {
+      config.callbacks.onclose({ code: 1008, reason: 'Session resumption handle expired.' });
+      return late.promise;
+    }
+    return Promise.resolve(fresh);
+  } } });
+  const controller = await h.start();
+  t.after(() => controller.close());
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(attempts[0].config.sessionResumption, { handle: 'expired-checkpoint' });
+  assert.deepEqual(attempts[1].config.sessionResumption, {});
+  assert.equal(h.calls.content.length, 1, 'fresh fallback starts the ordinary greeting');
+  assert.ok(!h.controls().includes('SESSION.RESUMED'));
+  assert.deepEqual(h.socket.sent.find(value => value.type === 'session'), { type: 'session', resume_handle: '' });
+  const count = h.socket.sent.length;
+  attempts[0].callbacks.onmessage(audioContent());
+  attempts[0].callbacks.onerror(new Error('expired-checkpoint secret-test-provider-key'));
+  late.resolve({ close() { lateCloses += 1; } });
+  await settle();
+  assert.equal(lateCloses, 1);
+  assert.equal(h.socket.sent.length, count);
+  assert.equal(h.ends.length, 0);
+  assert.doesNotMatch(JSON.stringify(h.socket.sent), /secret-test-provider-key|expired-checkpoint/);
+  await controller.close();
+  assert.equal(freshCloses, 1);
+  assert.equal(h.ends.length, 1);
+});
+
+test('generic authentication/quota failures do not trigger a fresh resumption retry', async (t) => {
+  for (const reason of ['API key invalid: secret-test-provider-key', 'Quota exhausted', 'Network unavailable']) {
+    await t.test(reason.split(':')[0], async () => {
+      const h = setup({ beforeConnectReturns(config) { config.callbacks.onclose({ code: 1008, reason }); } });
+      h.opts.context.sessionControl = { idleSeconds: 60, resumeHandle: 'saved-checkpoint' };
+      await assert.rejects(h.start(), { code: 'VOICE_STARTUP_FAILED' });
+      assert.equal(h.calls.connect.length, 1);
+      assert.equal(h.ends.length, 1);
+      assert.equal(h.clock.timers.size, 0);
+      assert.doesNotMatch(JSON.stringify(h.socket.sent), /secret-test-provider-key|Quota exhausted|Network unavailable/);
+    });
+  }
+});
+
+test('a fresh fallback still shares the original startup deadline and closes late work', async () => {
+  const h = setup();
+  h.opts.context.sessionControl = { idleSeconds: 60, resumeHandle: 'invalid-checkpoint' };
+  const late = deferred();
+  let attempts = 0;
+  let lateCloses = 0;
+  h.opts.createGeminiClient = async () => ({ live: { connect(config) {
+    attempts += 1;
+    if (attempts === 1) {
+      config.callbacks.onclose({ reason: 'Invalid session resumption handle.' });
+      return new Promise(() => {});
+    }
+    return late.promise;
+  } } });
+  const rejected = assert.rejects(h.start(), { code: 'VOICE_STARTUP_FAILED' });
+  await settle();
+  assert.equal(attempts, 2);
+  h.clock.advance(19_999);
+  assert.equal(h.ends.length, 0);
+  h.clock.advance(1);
+  await rejected;
+  assert.equal(h.ends[0].reason, 'provider_startup_timeout');
+  late.resolve({ close() { lateCloses += 1; } });
+  await settle();
+  assert.equal(lateCloses, 1);
+  assert.equal(h.ends.length, 1);
+  assert.equal(h.clock.timers.size, 0);
+});
+
+test('malformed opt-in idle settings and unsafe resume handles are rejected before connecting', async () => {
+  for (const sessionControl of [null, { idleSeconds: 29 }, { idleSeconds: 301 },
+    { idleSeconds: 60.5 }, { idleSeconds: 60, resumeHandle: 'has space' }]) {
+    const h = setup();
+    h.opts.context.sessionControl = sessionControl;
+    await assert.rejects(h.start(), /Invalid voice session control/);
+    assert.equal(h.calls.connect.length, 0);
+    assert.equal(h.clock.timers.size, 0);
+  }
+});

@@ -22,6 +22,20 @@ function clippedText(value, maxLength) {
   return typeof value === 'string' ? value.slice(0, maxLength).trim() : '';
 }
 
+function resumeHandle(value) {
+  return typeof value === 'string' && /^[\x21-\x7e]{1,2048}$/.test(value) ? value : '';
+}
+
+function rejectedResumption(event) {
+  const detail = typeof event?.reason === 'string' ? event.reason
+    : typeof event?.message === 'string' ? event.message : '';
+  // Close codes alone also describe authentication/quota/network failures.
+  // Inspect bounded diagnostics without forwarding or logging their contents.
+  const text = detail.slice(0, 4096).toLowerCase();
+  return /resum(?:e|ption)|session[ _-]*handle/.test(text) &&
+    /invalid|expired|not[ _-]*found|no[ _-]*longer[ _-]*valid/.test(text);
+}
+
 function pcmBytes(inlineData) {
   const mime = String(inlineData.mimeType || '').toLowerCase();
   const parameters = mime.split(';').map((part) => part.trim());
@@ -64,11 +78,25 @@ export async function startVoiceSession({
   const startedAt = clock.now();
   const timers = new Set();
   const settings = context.settings;
+  const sessionControl = context.sessionControl;
+  if (sessionControl !== undefined && (!sessionControl ||
+      !Number.isInteger(sessionControl.idleSeconds) || sessionControl.idleSeconds < 30 ||
+      sessionControl.idleSeconds > 300 ||
+      (sessionControl.resumeHandle !== undefined && sessionControl.resumeHandle !== '' &&
+        !resumeHandle(sessionControl.resumeHandle)))) {
+    throw new TypeError('Invalid voice session control.');
+  }
+  let advertisedHandle = sessionControl ? resumeHandle(sessionControl.resumeHandle) : '';
   let closed = false;
   let providerSession;
+  let providerAttempt;
+  const closedProviders = new WeakSet();
   let packetizer;
   let responseTimer;
   let startupTimer;
+  let idleTimer;
+  let awaitingListeningFrame = false;
+  let lastActivityAt = -Infinity;
   let connected = false;
   let awaitingReply = true;
   let speaking = false;
@@ -110,6 +138,12 @@ export async function startVoiceSession({
     }
   }
 
+  function closeProvider(session) {
+    if (!session || closedProviders.has(session)) return;
+    closedProviders.add(session);
+    try { session.close(); } catch {}
+  }
+
   function finish(reason, code = 1000) {
     if (closed) return finalization;
     closed = true;
@@ -120,7 +154,7 @@ export async function startVoiceSession({
     deviceSocket.off('close', onDeviceClose);
     deviceSocket.off('error', onDeviceError);
     try { packetizer?.close(); } catch {}
-    try { providerSession?.close(); } catch {}
+    closeProvider(providerSession);
     try {
       if (deviceSocket.readyState === 1) deviceSocket.close(code, reason);
     } catch {}
@@ -175,6 +209,30 @@ export async function startVoiceSession({
     responseTimer = timer(() => fail('provider_response_timeout'), RESPONSE_TIMEOUT_MS);
   }
 
+  function armIdleTimeout() {
+    clearTimer(idleTimer);
+    if (!sessionControl || closed || !connected || speaking || awaitingReply || awaitingListeningFrame) return;
+    idleTimer = timer(() => {
+      if (speaking || awaitingReply) return;
+      if (control('SESSION.IDLE')) finish('idle_standby');
+    }, sessionControl.idleSeconds * 1000);
+  }
+
+  function inputActivity(text) {
+    if (!sessionControl || typeof text !== 'string' || !text.trim()) return;
+    if (clock.now() - lastActivityAt >= 1000) {
+      lastActivityAt = clock.now();
+      control('USER.ACTIVITY');
+    }
+    armIdleTimeout();
+  }
+
+  function advertiseHandle(handle) {
+    if (handle === advertisedHandle) return;
+    advertisedHandle = handle;
+    send(JSON.stringify({ type: 'session', resume_handle: handle }));
+  }
+
   function rotateWhenDrained(reason = 'session_rotation') {
     rotationRequested = true;
     if (closed || speaking || awaitingReply || userTranscript || rotationTimer !== undefined) return;
@@ -211,7 +269,9 @@ export async function startVoiceSession({
     transcript('assistant', assistantTranscript);
     userTranscript = '';
     assistantTranscript = '';
+    awaitingListeningFrame = Boolean(sessionControl);
     if (rotationRequested) rotateWhenDrained();
+    else armIdleTimeout();
   }
 
   function appendTranscript(role, text) {
@@ -237,6 +297,16 @@ export async function startVoiceSession({
         rotateWhenDrained('provider_rotation');
       }
       if (closed) return;
+      if (sessionControl && message?.sessionResumptionUpdate) {
+        const update = message.sessionResumptionUpdate;
+        if (update.resumable === false) {
+          // The old checkpoint may omit intervening turns. Clear the device's
+          // handle until Google advertises a current, resumable checkpoint.
+          advertiseHandle('');
+        } else if (update.resumable === true && resumeHandle(update.newHandle)) {
+          advertiseHandle(update.newHandle);
+        }
+      }
       const content = message?.serverContent;
       if (!content) return;
       if (content.interrupted) {
@@ -247,6 +317,7 @@ export async function startVoiceSession({
       }
       if (content.inputTranscription) {
         appendTranscript('user', content.inputTranscription.text);
+        inputActivity(content.inputTranscription.text);
         // As in ElatoAI's Gemini adapter, transcription is metadata: keep
         // forwarding microphone PCM (including silence) for automatic VAD.
         // Only actual model audio below changes the device out of listening.
@@ -263,6 +334,7 @@ export async function startVoiceSession({
         const audio = pcmBytes(part.inlineData);
         if (audio.length === 0) continue;
         if (!speaking) {
+          clearTimer(idleTimer);
           if (userTranscript) commitInput();
           packetizer.reset();
           speaking = true;
@@ -311,6 +383,12 @@ export async function startVoiceSession({
         fail('device_audio_rate_limit');
         return;
       }
+      if (sessionControl && awaitingListeningFrame) {
+        // Firmware sends mic PCM only after playback is fully drained. Start
+        // idle time at that first frame; later silence frames never reset it.
+        awaitingListeningFrame = false;
+        armIdleTimeout();
+      }
       providerSession.sendRealtimeInput({
         audio: { data: bytes.toString('base64'), mimeType: 'audio/pcm;rate=16000' },
       });
@@ -356,9 +434,7 @@ export async function startVoiceSession({
       is_ota: false, is_reset: false,
     }))) return;
 
-    const session = await client.live.connect({
-      model,
-      config: {
+    const baseConfig = {
         responseModalities: ['AUDIO'],
         systemInstruction: [
           clippedText(settings.system_prompt, 8000),
@@ -374,17 +450,90 @@ export async function startVoiceSession({
           automaticActivityDetection: { disabled: false, silenceDurationMs: 700 },
           activityHandling: 'NO_INTERRUPTION',
         },
-      },
-      callbacks: {
-        onmessage: onProviderMessage,
-        onerror: () => fail('provider_error'),
-        onclose: () => { if (!closed) fail('provider_closed'); },
-      },
-    });
-    if (closed) { try { session.close(); } catch {} return; }
+      ...(sessionControl ? {
+        sessionResumption: {}, contextWindowCompression: { slidingWindow: {} },
+      } : {}),
+    };
+    let requestedHandle = advertisedHandle;
+    let session;
+    for (let attemptNumber = 0; attemptNumber < 2 && !closed; attemptNumber += 1) {
+      const attempt = { handle: requestedHandle, accepted: false, progress: false, rejected: false, announced: false };
+      providerAttempt = attempt;
+      let rejectAttempt;
+      const failedAttempt = new Promise((_, reject) => { rejectAttempt = reject; });
+      const current = () => !closed && providerAttempt === attempt;
+      const announceResumed = () => {
+        if (!current() || !attempt.handle || attempt.announced || speaking) return;
+        attempt.announced = true;
+        awaitingReply = false;
+        control('SESSION.RESUMED');
+      };
+      const canRejectResume = (event) => attempt.handle && !attempt.accepted && !attempt.progress &&
+        rejectedResumption(event);
+      const config = {
+        ...baseConfig,
+        ...(sessionControl ? { sessionResumption: requestedHandle ? { handle: requestedHandle } : {} } : {}),
+      };
+      const connection = Promise.resolve().then(() => client.live.connect({
+        model, config,
+        callbacks: {
+          onmessage(message) {
+            if (!current()) return;
+            if (message?.setupComplete) {
+              attempt.accepted = true;
+              announceResumed();
+            }
+            if (message?.error && canRejectResume(message.error)) {
+              attempt.rejected = true;
+              return; // Wait for this rejected socket to close before retrying.
+            }
+            if (message?.serverContent) attempt.progress = true;
+            onProviderMessage(message);
+          },
+          onerror(event) {
+            if (!current()) return;
+            if (canRejectResume(event)) attempt.rejected = true;
+            else fail('provider_error');
+          },
+          onclose(event) {
+            if (!current()) return;
+            if (!attempt.accepted && !attempt.progress && (attempt.rejected || canRejectResume(event))) {
+              const error = new Error('Session checkpoint was rejected.');
+              error.code = 'RESUME_REJECTED';
+              rejectAttempt(error);
+            } else fail('provider_closed');
+          },
+        },
+      }));
+      // SDK 2.32 does not reject connect() when its setup socket closes. Also
+      // close an obsolete connection if its promise resolves after cancellation.
+      connection.then((late) => {
+        if (!current()) closeProvider(late);
+      }, () => {});
+      try {
+        session = await Promise.race([connection, failedAttempt, startupStopped.then(() => null)]);
+      } catch (error) {
+        if (error?.code !== 'RESUME_REJECTED' || !requestedHandle || attemptNumber !== 0 || closed) throw error;
+        providerAttempt = undefined;
+        advertiseHandle('');
+        requestedHandle = '';
+        continue;
+      }
+      if (closed) { closeProvider(session); return; }
+      attempt.accepted = true; // SDK resolves only after setupComplete.
+      if (requestedHandle) announceResumed();
+      break;
+    }
+    if (closed) { closeProvider(session); return; }
     providerSession = session;
     connected = true;
     clearTimer(startupTimer);
+    if (requestedHandle) {
+      if (!speaking) awaitingReply = false;
+      awaitingListeningFrame = true;
+      armIdleTimeout();
+      return; // Native context restoration needs no greeting or text replay.
+    }
     const history = (Array.isArray(context.history) ? context.history : [])
       .filter((item) => (item?.role === 'user' || item?.role === 'assistant') && typeof item.content === 'string')
       .slice(-20)

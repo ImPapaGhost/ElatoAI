@@ -29,7 +29,7 @@ for (const part of parts) {
 }
 await writeFile(new URL('SHA256SUMS.txt', outputDir), `${checksums.join('\n')}\n`);
 await writeFile(new URL('manifest.json', outputDir), `${JSON.stringify({
-  name: 'Cardputer Voice Easy', version: '0.3.2', new_install_prompt_erase: true,
+  name: 'Cardputer Voice Easy', version: '0.4.0', new_install_prompt_erase: true,
   builds: [{ chipFamily: 'ESP32-S3', serialType: 'cdc', parts: parts.map(({ path, offset }) => ({ path, offset })) }],
 }, null, 2)}\n`);
 await build({

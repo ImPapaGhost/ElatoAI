@@ -77,10 +77,15 @@ enum DeviceState
     WAITING,
     OTA,
     FACTORY_RESET,
-    SLEEP
+    SLEEP,
+    STANDBY
 };
 
 extern volatile DeviceState deviceState;
+
+#if defined(EASY_SETUP_MODE)
+constexpr unsigned long CARDPUTER_VOICE_IDLE_SECONDS = 60;
+#endif
 
 // WiFi credentials
 extern const char *EAP_IDENTITY;

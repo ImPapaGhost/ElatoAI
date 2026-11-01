@@ -95,6 +95,11 @@ guaranteed to be free. BYOK has no app-imposed daily voice-time or connection-co
 allowance. Provider quotas still apply; connections briefly rotate within four
 minutes to meet hosting limits.
 
+With Gemini on Easy firmware 0.4, one minute without speech puts the Cardputer
+in **STANDBY** and closes the voice connections. Press **Enter** to continue.
+Gemini can resume the conversation for up to two hours after disconnecting.
+Restarting the Cardputer or an expired session starts a new conversation.
+
 The original private-owner voice path and the USB setup protocol have been
 checked on an original Cardputer. The new 0.3 wireless settings path has automated
 checks; physical Wi-Fi validation is still pending.

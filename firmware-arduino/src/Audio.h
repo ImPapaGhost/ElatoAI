@@ -77,6 +77,9 @@ void micTask(void *parameter);
 void shutdownAudioHardware();
 #if defined(EASY_SETUP_MODE)
 bool cardputerProviderConnectionFailed();
+bool cardputerVoiceInStandby();
+// UI only requests a wake; the network task owns voice disconnect/reconnect.
+void requestCardputerVoiceWake();
 #endif
 
 #endif
