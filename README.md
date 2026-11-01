@@ -140,9 +140,10 @@ want to keep Launcher, see the Launcher note below before flashing.
    **ELATO-DEVICE** Wi-Fi network. Stay connected even if it says "no internet."
 2. On that same phone or computer, open
    [http://192.168.4.1/wifi](http://192.168.4.1/wifi).
-3. Select your **2.4 GHz** home Wi-Fi network, enter its password, and save it.
-4. Reconnect your phone or computer to your normal Wi-Fi. The Cardputer should
-   connect to the network you saved; tap Reset once if needed.
+3. Choose **Manual Connect**, enter your **2.4 GHz** home Wi-Fi name and password,
+   and save it. **Scan for Networks** is optional.
+4. Press **Reset on the Cardputer** to connect to the saved network, then reconnect
+   your phone or computer to your normal Wi-Fi.
 
 If `192.168.4.1` times out, first check that the phone or computer is still
 connected to **ELATO-DEVICE**. The setup address is only reachable on that network.

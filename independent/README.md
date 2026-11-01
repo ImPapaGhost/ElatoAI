@@ -126,9 +126,19 @@ direct USB flash replaces the installed firmware/Launcher. A real deployment
 hostname, CA, and device token are required before flashing; placeholder builds
 are compilation checks only.
 
-On first network setup, join **CARDPUTER-SETUP** and open
-`http://192.168.4.1/wifi`. Save your 2.4 GHz Wi-Fi network. Existing saved networks
-can be reused. Restart, wait for the greeting and **LISTENING**, then speak.
+On first network setup:
+
+1. On your phone or computer, join **CARDPUTER-SETUP**. Stay connected if it says
+   there is no internet.
+2. Open `http://192.168.4.1/wifi` in the browser **on that same device**. Connecting
+   your phone does not connect your computer to the setup network.
+3. Choose **Manual Connect**, enter your **2.4 GHz** home Wi-Fi name and password,
+   then choose **Save Wi-Fi**. **Scan for Networks** is optional.
+4. Press **Reset on the Cardputer** so it connects to the saved network.
+5. Reconnect your phone or computer to your normal Wi-Fi. Wait for the Cardputer's
+   greeting and **LISTENING**, then speak.
+
+Saved networks are reused on later boots.
 
 Private mode takes its credential from `PersonalConfig.h`; an old ElatoAI token
 in NVS is not used. To rotate the personal token, update this header and reflash.

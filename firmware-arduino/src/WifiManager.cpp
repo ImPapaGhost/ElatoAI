@@ -292,7 +292,7 @@ bool WIFIMANAGER::writeToNVS() {
  * @return false on failure
  */
 bool WIFIMANAGER::addWifi(String apName, String apPass, bool updateNVS) {
-  if(apName.length() < 1 || apName.length() > 31) {
+  if(apName.length() < 1 || apName.length() > 32) {
     logMessage("[WIFI] No SSID given or ssid too long");
     return false;
   }
@@ -660,28 +660,52 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
   });
 
 #if ASYNC_WEBSERVER == true
-  webServer->on((apiPrefix + "/add").c_str(), HTTP_POST, [&](AsyncWebServerRequest * request){}, NULL,
-    [&](AsyncWebServerRequest * request, uint8_t *data, size_t len, size_t index, size_t total) {
-    JsonDocument jsonBuffer;
-    deserializeJson(jsonBuffer, (const char*)data);
-    auto resp = request;
+  // The JSON handler assembles split body callbacks and bounds their size.
+  // Raw body callbacks are not guaranteed to receive a null-terminated string.
+  auto *addNetworkHandler = new AsyncCallbackJsonWebHandler(
+    (apiPrefix + "/add").c_str(), [this](AsyncWebServerRequest *request, JsonVariant &json) {
+      if (!json["apName"].is<String>() || !json["apPass"].is<String>()) {
+        request->send(422, "application/json", "{\"message\":\"Enter a network name and password\"}");
+        return;
+      }
+      const String apName = json["apName"].as<String>();
+      const String apPass = json["apPass"].as<String>();
+      if (apName.length() == 0 || apName.length() > 32 || apPass.length() > 63) {
+        request->send(422, "application/json", "{\"message\":\"Invalid network name or password length\"}");
+        return;
+      }
+      if (!addWifi(apName, apPass)) {
+        request->send(500, "application/json", "{\"message\":\"Unable to save the network\"}");
+        return;
+      }
+      request->send(200, "application/json", "{\"message\":\"Network saved. Press Reset on the Cardputer to connect.\"}");
+    });
+  addNetworkHandler->setMethod(HTTP_POST);
+  addNetworkHandler->setMaxContentLength(512);
+  webServer->addHandler(addNetworkHandler);
 #else
   webServer->on((apiPrefix + "/add").c_str(), HTTP_POST, [&]() {
-    if (webServer->args() != 1) {
-      webServer->send(400, "application/json", "{\"message\":\"Bad Request. Only accepting one json body in request!\"}");
-    }
-    JsonDocument jsonBuffer;
-    deserializeJson(jsonBuffer, webServer->arg(0));
-    auto resp = webServer;
-#endif
-    if (!jsonBuffer["apName"].is<String>() || !jsonBuffer["apPass"].is<String>()) {
-      resp->send(422, "application/json", "{\"message\":\"Invalid data\"}");
+    if (webServer->args() != 1 || webServer->arg(0).length() > 512) {
+      webServer->send(400, "application/json", "{\"message\":\"Invalid network request\"}");
       return;
     }
-    if (!addWifi(jsonBuffer["apName"].as<String>(), jsonBuffer["apPass"].as<String>())) {
-      resp->send(500, "application/json", "{\"message\":\"Unable to process data\"}");
-    } else {resp->send(200, "application/json", "{\"message\":\"New network added\"");}
+    JsonDocument jsonBuffer;
+    const DeserializationError parseError = deserializeJson(jsonBuffer, webServer->arg(0));
+    if (parseError || !jsonBuffer["apName"].is<String>() || !jsonBuffer["apPass"].is<String>()) {
+      webServer->send(422, "application/json", "{\"message\":\"Enter a network name and password\"}");
+      return;
+    }
+    const String apName = jsonBuffer["apName"].as<String>();
+    const String apPass = jsonBuffer["apPass"].as<String>();
+    if (apName.length() == 0 || apName.length() > 32 || apPass.length() > 63) {
+      webServer->send(422, "application/json", "{\"message\":\"Invalid network name or password length\"}");
+      return;
+    }
+    if (!addWifi(apName, apPass)) {
+      webServer->send(500, "application/json", "{\"message\":\"Unable to save the network\"}");
+    } else webServer->send(200, "application/json", "{\"message\":\"Network saved. Press Reset on the Cardputer to connect.\"}");
   });
+#endif
 
 #if ASYNC_WEBSERVER == true
   webServer->on((apiPrefix + "/id").c_str(), HTTP_DELETE, [&](AsyncWebServerRequest * request){}, NULL,
@@ -770,7 +794,7 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
 #endif
     JsonDocument jsonDoc;
 
-    int scanResult;
+    int16_t scanResult;
     String ssid;
     uint8_t encryptionType;
     int32_t rssi;
@@ -779,13 +803,19 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
 
     scanResult = WiFi.scanComplete();
     if (scanResult == WIFI_SCAN_FAILED) {
-      scanResult = WiFi.scanNetworks(true, true);   // FIXME: scanNetworks is disconnecting clients!
+      // Scanning can interrupt AP traffic, so the page starts this only after
+      // the user explicitly presses Scan. Repeated GETs poll the same route.
+      scanResult = WiFi.scanNetworks(true, true);
+    }
+    if (scanResult == WIFI_SCAN_RUNNING) {
       jsonDoc["status"] = "scanning";
-    } else if (scanResult > 0) {
-      for (int8_t i = 0; i < scanResult; i++) {
-        WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, bssid, channel);
-
-        JsonObject wifiNet = jsonDoc.createNestedObject();
+    } else if (scanResult >= 0) {
+      jsonDoc["status"] = "complete";
+      JsonArray foundNetworks = jsonDoc["networks"].to<JsonArray>();
+      const int16_t resultCount = min(scanResult, int16_t{64});
+      for (int16_t i = 0; i < resultCount; i++) {
+        if (!WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, bssid, channel)) continue;
+        JsonObject wifiNet = foundNetworks.add<JsonObject>();
         wifiNet["ssid"] = ssid;
         wifiNet["encryptionType"] = encryptionType;
         wifiNet["rssi"] = rssi;
@@ -793,10 +823,14 @@ void WIFIMANAGER::attachWebServer(WebServer * srv) {
         yield();
       }
       WiFi.scanDelete();
+    } else {
+      jsonDoc["status"] = "failed";
+      jsonDoc["message"] = "Scan failed. Use Manual Connect to enter your Wi-Fi details.";
     }
 #if ASYNC_WEBSERVER == true
     serializeJson(jsonDoc, *response);
     response->setCode(200);
+    response->addHeader("Cache-Control", "no-store");
     response->setContentLength(measureJson(jsonDoc));
     request->send(response);
 #else
@@ -862,7 +896,7 @@ void WIFIMANAGER::attachUI() {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOUR ELATO 😊</title>
+    <title>__DEVICE_TITLE__ Wi-Fi setup</title>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -1044,10 +1078,11 @@ void WIFIMANAGER::attachUI() {
 <body>
     <div class="container">
         <div class="card">
-            <h1>YOUR ELATO DEVICE 😊</h1>
-            <div id="status"></div>
-            <button onclick="scanNetworks()">Scan for Networks</button>
+            <h1>__DEVICE_TITLE__ Wi-Fi setup</h1>
+            <p>Enter your 2.4 GHz Wi-Fi details, save them, then press Reset on the Cardputer.</p>
+            <div id="status" class="status info">Manual Connect is ready. Scanning is optional.</div>
             <button onclick="showConnectModal()">Manual Connect</button>
+            <button id="scanButton" onclick="scanNetworks()">Scan for Networks</button>
         </div>
 
         <div class="card">
@@ -1066,14 +1101,15 @@ void WIFIMANAGER::attachUI() {
             <h2>Connect to Network</h2>
             <form id="connectForm" onsubmit="connectToNetwork(event)">
                 <label for="apName">Network Name:</label>
-                <input type="text" id="apName" required>
+                <input type="text" id="apName" maxlength="32" autocomplete="off" spellcheck="false" required>
                 
                 <label for="apPass">Password:</label>
-                <input type="password" id="apPass" required>
+                <input type="password" id="apPass" maxlength="63" autocomplete="current-password">
+                <p>Leave the password blank only for an open Wi-Fi network.</p>
                 
                 <div class="button-group">
                     <button type="button" class="button-secondary" onclick="closeModal()">Cancel</button>
-                    <button type="submit">Connect</button>
+                    <button id="saveButton" type="submit">Save Wi-Fi</button>
                 </div>
             </form>
         </div>
@@ -1081,20 +1117,32 @@ void WIFIMANAGER::attachUI() {
 
     <script>
         const API_BASE = '/api';
-        let networks = {};
+        let scanning = false;
 
-        // Load saved networks when page loads
+        // A radio scan can interrupt the phone's AP connection. Do not scan
+        // automatically while the user is trying to open this page.
         window.addEventListener('load', () => {
             loadSavedNetworks();
-            scanNetworks();
         });
+
+        async function fetchJson(path, options = {}) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const response = await fetch(`${API_BASE}${path}`, {
+                    cache: 'no-store', ...options, signal: controller.signal,
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Request failed');
+                return result;
+            } finally {
+                clearTimeout(timeout);
+            }
+        }
 
         async function loadSavedNetworks() {
             try {
-                const response = await fetch(`${API_BASE}/wifi/configlist`);
-                if (!response.ok) throw new Error('Failed to fetch saved networks');
-                
-                const savedNetworks = await response.json();
+                const savedNetworks = await fetchJson('/wifi/configlist');
                 displaySavedNetworks(savedNetworks);
             } catch (error) {
                 showStatus('Failed to load saved networks: ' + error.message, 'error');
@@ -1103,68 +1151,85 @@ void WIFIMANAGER::attachUI() {
 
         function displaySavedNetworks(networks) {
             const networkList = document.getElementById('savedNetworks');
-            const networkArray = Object.values(networks);
+            const networkArray = Object.values(networks || {});
+            networkList.replaceChildren();
             
             if (networkArray.length === 0) {
-                networkList.innerHTML = '<div class="network-item">No saved networks</div>';
+                networkList.textContent = 'No saved networks';
                 return;
             }
 
-            networkList.innerHTML = networkArray.map(network => `
-                <div class="network-item">
-                    <div class="network-info">
-                        <div class="ssid">${network.apName}</div>
-                        <button onclick="deleteNetwork('${network.id}')">🗑️ Remove</button>
-                    </div>
-                </div>
-            `).join('');
+            for (const network of networkArray) {
+                const row = document.createElement('div');
+                row.className = 'network-item';
+                const name = document.createElement('div');
+                name.className = 'network-info';
+                name.textContent = network.apName;
+                const remove = document.createElement('button');
+                remove.textContent = 'Remove';
+                remove.onclick = () => deleteNetwork(Number(network.id));
+                row.append(name, remove);
+                networkList.append(row);
+            }
         }
 
         async function scanNetworks() {
+            if (scanning) return;
+            scanning = true;
+            document.getElementById('scanButton').disabled = true;
             try {
-                showStatus('Scanning for networks...', 'info');
-                const response = await fetch(`${API_BASE}/wifi/scan`);
-                if (!response.ok) throw new Error('Network scan failed');
-                
-                // Wait 5 seconds for the scan to complete
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                
-                const scanResponse = await fetch(`${API_BASE}/wifi/scan/results`);
-                if (!scanResponse.ok) throw new Error('Failed to fetch scan results');
-                
-                networks = await scanResponse.json();
-                displayNetworks(networks);
-                showStatus('Networks found', 'success');
+                showStatus('Scanning. The Wi-Fi connection may briefly pause; Manual Connect does not need a scan.', 'info');
+                for (let attempt = 0; attempt < 20; attempt++) {
+                    const result = await fetchJson('/wifi/scan');
+                    if (result.status === 'complete') {
+                        displayNetworks(result.networks || []);
+                        showStatus('Scan complete. Select your network or use Manual Connect.', 'success');
+                        return;
+                    }
+                    if (result.status !== 'scanning') {
+                        throw new Error(result.message || 'Network scan failed');
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                throw new Error('Scan timed out. Use Manual Connect instead.');
             } catch (error) {
-                showStatus(error.message, 'error');
+                showStatus('Scan unavailable. Stay on __SETUP_NETWORK__ and use Manual Connect.', 'error');
+            } finally {
+                scanning = false;
+                document.getElementById('scanButton').disabled = false;
             }
         }
 
         function displayNetworks(networks) {
             const networkList = document.getElementById('networkList');
             const networkArray = Object.values(networks || {})
-              .filter(network => network && network.ssid && network.ssid.length > 0);
+              .filter(network => network && typeof network.ssid === 'string' && network.ssid.length > 0);
+            networkList.replaceChildren();
             
             if (networkArray.length === 0) {
-                networkList.innerHTML = '<div class="network-item">No networks found</div>';
+                networkList.textContent = 'No networks found. Use Manual Connect.';
                 return;
             }
 
             // Sort networks by RSSI
             networkArray.sort((a, b) => b.rssi - a.rssi);
 
-            networkList.innerHTML = networkArray
-                .map(network => `
-                    <div class="network-item" onclick="showConnectModal('${network.ssid}')">
-                        <div class="network-info">
-                            <div class="ssid">${network.ssid}</div>
-                            <div class="signal">
-                                Signal: ${getSignalStrength(network.rssi)}
-                                ${network.encryptionType > 0 ? '🔒' : ''}
-                            </div>
-                        </div>
-                    </div>
-                `).join('');
+            for (const network of networkArray) {
+                const row = document.createElement('div');
+                row.className = 'network-item';
+                row.onclick = () => showConnectModal(network.ssid);
+                const info = document.createElement('div');
+                info.className = 'network-info';
+                const name = document.createElement('div');
+                name.className = 'ssid';
+                name.textContent = network.ssid;
+                const signal = document.createElement('div');
+                signal.className = 'signal';
+                signal.textContent = `Signal: ${getSignalStrength(network.rssi)} ${network.encryptionType > 0 ? '(password)' : '(open)'}`;
+                info.append(name, signal);
+                row.append(info);
+                networkList.append(row);
+            }
         }
 
         function getSignalStrength(rssi) {
@@ -1188,15 +1253,13 @@ void WIFIMANAGER::attachUI() {
 
         async function deleteNetwork(deleteId) {
             try {
-                const response = await fetch(`${API_BASE}/wifi/id`, {
+                await fetchJson('/wifi/id', {
                     method: 'DELETE',
                     headers: {
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({ id: deleteId }),
                 });
-                
-                if (!response.ok) throw new Error(JSON.stringify(response));
                 
                 showStatus('Network deleted successfully', 'success');
                 await loadSavedNetworks(); // Refresh the list
@@ -1209,10 +1272,12 @@ void WIFIMANAGER::attachUI() {
             event.preventDefault();
             const apName = document.getElementById('apName').value;
             const apPass = document.getElementById('apPass').value;
+            const saveButton = document.getElementById('saveButton');
+            saveButton.disabled = true;
 
             try {
-                showStatus('Connecting to network...', 'info');
-                const response = await fetch(`${API_BASE}/wifi/add`, {
+                showStatus('Saving Wi-Fi details...', 'info');
+                await fetchJson('/wifi/add', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1220,27 +1285,35 @@ void WIFIMANAGER::attachUI() {
                     body: JSON.stringify({ apName, apPass }),
                 });
 
-                if (!response.ok) throw new Error('Connection failed');
-
                 closeModal();
-                showStatus('Successfully connected!', 'success');
+                showStatus('Wi-Fi saved. Press Reset on the Cardputer now. Then reconnect your phone or computer to your normal Wi-Fi.', 'success');
                 
                 // Refresh saved networks list
                 await loadSavedNetworks();
             } catch (error) {
                 showStatus(error.message, 'error');
+            } finally {
+                saveButton.disabled = false;
             }
         }
 
         function showStatus(message, type) {
             const statusElement = document.getElementById('status');
-            statusElement.innerHTML = message;
+            statusElement.textContent = message;
             statusElement.className = `status ${type}`;
         }
     </script>
 </body>
 </html>
 )html";
+
+#if defined(INDEPENDENT_MODE)
+    html.replace("__DEVICE_TITLE__", "Cardputer Voice");
+    html.replace("__SETUP_NETWORK__", "CARDPUTER-SETUP");
+#else
+    html.replace("__DEVICE_TITLE__", "ElatoAI");
+    html.replace("__SETUP_NETWORK__", "ELATO-DEVICE");
+#endif
 
 #if ASYNC_WEBSERVER == true
     request->send(200, "text/html", html);
