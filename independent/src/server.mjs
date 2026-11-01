@@ -243,10 +243,16 @@ export function createAppServer(options = {}) {
     let settlementStarted = false;
     let settlementPromise;
     let accepted = false;
+    let endLogged = false;
     let startedAt;
     let authTimer;
-    function finish({ elapsedSeconds = 0 } = {}) {
+    function finish({ elapsedSeconds = 0, reason = 'device_socket_closed' } = {}) {
       ended = true;
+      if (accepted && !endLogged) {
+        endLogged = true;
+        const safeReason = typeof reason === 'string' && /^[a-z_-]{1,48}$/.test(reason) ? reason : 'closed';
+        console.info('Voice connection ended', JSON.stringify({ reason: safeReason, elapsedSeconds }));
+      }
       clearInterval(authTimer);
       // A socket can disappear while reserveSession is awaiting the database.
       // Do not mark a nonexistent lease settled: setup must settle it if that
@@ -296,7 +302,11 @@ export function createAppServer(options = {}) {
       wss.handleUpgrade(req, socket, head, ws => {
         accepted = true;
         startedAt = Date.now();
-        ws.on("error", () => {});
+        ws.on("error", error => {
+          const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(error.code)
+            ? error.code : 'UNKNOWN';
+          console.info('Device websocket error', JSON.stringify({ code }));
+        });
         ws.on("close", () => {
           sessions.delete(ws);
           void finish({ elapsedSeconds: Math.ceil((Date.now() - startedAt) / 1000) });

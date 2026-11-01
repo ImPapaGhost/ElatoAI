@@ -398,10 +398,10 @@ bool cardputerWirelessCryptoReady() { return cryptoReady; }
 
 void pollCardputerWirelessSetup() {
   if (!initialised) return;
-  if (WiFi.status() == WL_CONNECTED && !mdnsStarted) {
+  if (paired && WiFi.status() == WL_CONNECTED && !mdnsStarted) {
     mdnsStarted = MDNS.begin(mdnsName);
     if (mdnsStarted) MDNS.addService("http", "tcp", PORT);
-  } else if (WiFi.status() != WL_CONNECTED && mdnsStarted) {
+  } else if ((!paired || WiFi.status() != WL_CONNECTED) && mdnsStarted) {
     MDNS.end();
     mdnsStarted = false;
   }

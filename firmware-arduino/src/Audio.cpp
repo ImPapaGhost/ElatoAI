@@ -8,6 +8,9 @@ static std::atomic<bool> easyVoiceError{false};
 bool cardputerProviderConnectionFailed() { return easyVoiceError.load(); }
 #endif
 #include "PitchShift.h"
+#if defined(ELATO_CARDPUTER)
+#include <esp_heap_caps.h>
+#endif
 
 // WEBSOCKET
 SemaphoreHandle_t wsMutex;
@@ -280,7 +283,13 @@ public:
         }
         
         xSemaphoreTake(wsMutex, portMAX_DELAY);
-        webSocket.sendBIN(buffer, size);
+        const bool sent = webSocket.sendBIN(buffer, size);
+#if defined(ELATO_CARDPUTER)
+        if (!sent) {
+            Serial.printf("Microphone websocket write failed (free=%u largest=%u)\n",
+                          ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        }
+#endif
         xSemaphoreGive(wsMutex);
         return size;
     }
@@ -579,7 +588,8 @@ void websocketSetup(const String& server_domain, int port, const String& path)
         "Authorization: Bearer " + provider.apiKey + "\r\n" +
         "X-Voice-Provider: " + provider.provider + "\r\n" +
         "X-Voice-Reference: " + provider.referenceId + "\r\n" +
-        "X-Voice-Name: " + provider.voice + "\r\n";
+        // The client adds the line ending and its User-Agent header itself.
+        "X-Voice-Name: " + provider.voice;
 #else
     const String headers =
         "Authorization: Bearer " + String(authTokenGlobal) + "\r\n" +

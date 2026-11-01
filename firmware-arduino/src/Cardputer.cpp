@@ -251,6 +251,8 @@ bool cardputerEnterSpeakerMode() {
 
 bool cardputerEnterMicrophoneMode() {
   AudioLock lock;
+  Serial.printf("Starting microphone (free=%u largest=%u)\n", ESP.getFreeHeap(),
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   if (cardputerAudioMode == CardputerAudioMode::Speaker ||
       M5Cardputer.Speaker.isRunning()) {
     cardputerSpeakerOutput.clearBuffer();
@@ -263,6 +265,8 @@ bool cardputerEnterMicrophoneMode() {
     return false;
   }
   cardputerAudioMode = CardputerAudioMode::Microphone;
+  Serial.printf("Microphone ready (free=%u largest=%u)\n", ESP.getFreeHeap(),
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   return true;
 }
 
