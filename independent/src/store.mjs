@@ -105,7 +105,10 @@ export function createStore(config, { fetchImpl = fetch } = {}) {
     configured({ database: service });
     const apiKey = service ? config.supabaseServiceRoleKey : config.supabaseAnonKey;
     const headers = { apikey: apiKey, 'Content-Type': 'application/json' };
-    if (service || token) headers.Authorization = `Bearer ${service ? apiKey : token}`;
+    // Modern sb_secret_ keys are API keys, not JWTs. Only legacy service-role
+    // JWTs and actual user session JWTs belong in Authorization: Bearer.
+    if (token) headers.Authorization = `Bearer ${token}`;
+    else if (service && !apiKey.startsWith('sb_secret_')) headers.Authorization = `Bearer ${apiKey}`;
     if (prefer) headers.Prefer = prefer;
     let response;
     try {

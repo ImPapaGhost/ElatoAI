@@ -1,0 +1,7 @@
+.env*
+.vercel/
+node_modules/
+checks/
+test/
+test-results/
+supabase/

@@ -84,6 +84,28 @@ test('a remotely verified non-owner token cannot access the dashboard', async ()
   await rejectsStatus(store.getDashboard(OTHER), 403);
 });
 
+test('modern secret API keys use only apikey while owner session JWTs remain bearer tokens', async () => {
+  const modern = { ...CONFIG, supabaseAnonKey: 'sb_publishable_test_only', supabaseServiceRoleKey: 'sb_secret_test_only' };
+  const { store, calls } = fixture(({ url, headers }) => {
+    if (url.pathname === '/rest/v1/cv_devices') {
+      assert.equal(headers.apikey, modern.supabaseServiceRoleKey);
+      assert.equal(headers.Authorization, undefined);
+      return [{ id: DEVICE, owner_id: OWNER, mac: MAC }];
+    }
+    if (url.pathname === '/auth/v1/user') {
+      assert.equal(headers.apikey, modern.supabaseAnonKey);
+      assert.equal(headers.Authorization, `Bearer ${ACCESS}`);
+      return { id: OWNER, email: CONFIG.ownerEmail };
+    }
+  }, modern);
+  await store.authenticateDevice(TOKEN, MAC);
+  await store.authenticateOwner(ACCESS);
+  for (const call of calls.filter(call => call.url.pathname !== '/auth/v1/user')) {
+    assert.equal(call.headers.apikey, modern.supabaseServiceRoleKey);
+    assert.equal(call.headers.Authorization, undefined);
+  }
+});
+
 test('device registration stores only a hash and returns the random credential once', async () => {
   let savedHash;
   const { store, calls } = fixture(({ url, json, headers }) => {

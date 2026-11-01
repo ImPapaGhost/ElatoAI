@@ -214,3 +214,14 @@ test("config rejects paid-model switches, unbounded budgets and unsafe app origi
   assert.equal(config.dailyVoiceSeconds, 600);
   assert.ok(!JSON.stringify(publicConfig(config)).includes("private"));
 });
+
+test("current Supabase publishable and secret variable names configure the private service", () => {
+  const config = readConfig({
+    SUPABASE_URL: "https://example.supabase.co", SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test_only", SUPABASE_SECRET_KEY: "sb_secret_test_only",
+    OWNER_EMAIL: "owner@example.com", APP_ORIGIN: "https://voice.example.com", GEMINI_API_KEY: "test_only_provider_key",
+  });
+  assert.equal(config.configured, true);
+  assert.equal(config.supabaseAnonKey, "sb_publishable_test_only");
+  assert.equal(config.supabaseServiceRoleKey, "sb_secret_test_only");
+  assert.ok(!JSON.stringify(publicConfig(config)).includes("sb_secret_"));
+});

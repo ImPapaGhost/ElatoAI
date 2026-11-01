@@ -56,19 +56,21 @@ In Vercel, import this GitHub repository and use the branch containing this
 directory (`codex/independent-cardputer` during the private preview).
 
 - Set **Root Directory** to `independent`.
-- Use the **Other** framework preset and a supported Node.js runtime (22 or newer).
+- Use the **Other** framework preset and Node.js **24 LTS**.
 - Use `npm ci` to install. This app has no frontend build step.
 - Add the environment variables listed in [.env.example](.env.example).
 - `APP_ORIGIN` must be the exact production origin, such as
   `https://your-app.vercel.app`, with no path or trailing slash.
 - `OWNER_EMAIL` must match the Supabase user you created.
-- Keep `SUPABASE_SERVICE_ROLE_KEY` and `GEMINI_API_KEY` in server environment
+- Keep `SUPABASE_SECRET_KEY` and `GEMINI_API_KEY` in server environment
   settings. They are never sent to the browser or device.
 - Keep the Google project on Free, and keep Vercel/Supabase on their free plans.
 
-The required Supabase keys are the project's URL, anon key, and service-role key
-(legacy API keys remain supported). They serve different roles: the anon key
-handles password authentication; only the server uses the service-role key.
+The required Supabase values are the project's URL, publishable key, and secret
+key. The publishable key handles password authentication; only the server uses
+the secret key. Copy them from **Settings → API Keys → Publishable and secret API
+keys**. Legacy `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY` variable names
+remain accepted for compatibility, but new deployments should use the new keys.
 
 Deploy, then open your production URL. The setup screen lists missing variable
 names without revealing their values. If Vercel deployment protection applies

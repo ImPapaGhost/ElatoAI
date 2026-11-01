@@ -15,15 +15,15 @@ function seconds(value, fallback, min, max, name, missing) {
 
 export function readConfig(env = process.env) {
   const missing = [];
-  const required = name => {
-    const value = env[name]?.trim() || "";
+  const required = (name, ...aliases) => {
+    const value = [name, ...aliases].map(key => env[key]?.trim()).find(Boolean) || "";
     if (!value || value.includes("your-project")) missing.push(name);
     return value;
   };
   const config = {
     supabaseUrl: required("SUPABASE_URL").replace(/\/$/, ""),
-    supabaseAnonKey: required("SUPABASE_ANON_KEY"),
-    supabaseServiceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY"),
+    supabaseAnonKey: required("SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"),
+    supabaseServiceRoleKey: required("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
     ownerEmail: required("OWNER_EMAIL").toLowerCase(),
     appOrigin: required("APP_ORIGIN").replace(/\/$/, ""),
     geminiApiKey: required("GEMINI_API_KEY"),
