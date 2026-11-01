@@ -247,7 +247,10 @@ export async function startVoiceSession({
       }
       if (content.inputTranscription) {
         appendTranscript('user', content.inputTranscription.text);
-        if (content.inputTranscription.finished) commitInput();
+        // As in ElatoAI's Gemini adapter, transcription is metadata: keep
+        // forwarding microphone PCM (including silence) for automatic VAD.
+        // Only actual model audio below changes the device out of listening.
+        if (content.inputTranscription.finished && userTranscript) armResponseTimeout();
       }
       if (content.outputTranscription) {
         appendTranscript('assistant', content.outputTranscription.text);
@@ -296,7 +299,8 @@ export async function startVoiceSession({
         }
         return;
       }
-      if (!connected || speaking || awaitingReply || rotationRequested || bytes.length === 0) return;
+      if (!connected || speaking || awaitingReply ||
+          (rotationRequested && !userTranscript) || bytes.length === 0) return;
       const now = clock.now();
       if (now - inputWindowStart >= 1000) {
         inputWindowStart = now;

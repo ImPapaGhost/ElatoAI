@@ -142,7 +142,7 @@ test('all audio parts in an event stream in order', async (t) => {
   assert.deepEqual(h.socket.sent.filter(Buffer.isBuffer).map(String), ['packet:5760', 'packet:400']);
 });
 
-test('mic is forwarded at 16kHz only while listening, and partial transcripts do not mute speech', async (t) => {
+test('mic is forwarded at 16kHz while listening, and transcription metadata never mutes speech', async (t) => {
   const h = setup();
   const controller = await h.start();
   t.after(() => controller.close());
@@ -157,15 +157,64 @@ test('mic is forwarded at 16kHz only while listening, and partial transcripts do
   assert.equal(h.calls.input.length, 2);
   assert.ok(!h.controls().includes('AUDIO.COMMITTED'));
   h.emit({ serverContent: { inputTranscription: { text: 'lo', finished: true } } });
-  assert.equal(h.controls().at(-1), 'AUDIO.COMMITTED');
+  assert.ok(!h.controls().includes('AUDIO.COMMITTED'));
   h.socket.emit('message', Buffer.alloc(640), true);
-  assert.equal(h.calls.input.length, 2);
-  h.emit(audioContent({ outputTranscription: { text: 'Hi again.' }, turnComplete: true }));
+  assert.equal(h.calls.input.length, 3, 'a completed transcript still leaves microphone input running');
+  h.emit(audioContent({ outputTranscription: { text: 'Hi again.' } }));
+  assert.deepEqual(h.controls().slice(-2), ['AUDIO.COMMITTED', 'RESPONSE.CREATED']);
+  h.socket.emit('message', Buffer.alloc(640), true);
+  assert.equal(h.calls.input.length, 3, 'actual model audio mutes the half-duplex microphone');
+  h.emit({ serverContent: { turnComplete: true } });
   assert.deepEqual(h.transcripts.slice(-2), [
     { role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi again.' },
   ]);
   h.socket.emit('message', Buffer.alloc(640), true);
-  assert.equal(h.calls.input.length, 3);
+  assert.equal(h.calls.input.length, 4);
+});
+
+test('final transcription keeps all forty subsequent silence frames flowing to Gemini VAD', async (t) => {
+  const h = setup();
+  const controller = await h.start();
+  t.after(() => controller.close());
+  greeting(h);
+  h.socket.emit('message', Buffer.alloc(640, 7), true);
+  h.emit({ serverContent: { inputTranscription: { text: 'Hello there.', finished: true } } });
+  for (let index = 0; index < 40; index += 1) {
+    h.clock.advance(20);
+    h.socket.emit('message', Buffer.alloc(640), true);
+  }
+  assert.equal(h.calls.input.length, 41);
+  for (const frame of h.calls.input.slice(1)) {
+    assert.equal(frame.audio.mimeType, 'audio/pcm;rate=16000');
+    assert.deepEqual(Buffer.from(frame.audio.data, 'base64'), Buffer.alloc(640));
+    assert.equal(frame.audioStreamEnd, undefined, 'reuse continuous input rather than adding a manual end signal');
+  }
+  assert.ok(!h.controls().includes('AUDIO.COMMITTED'));
+  assert.equal(h.ends.length, 0);
+  h.emit(audioContent({ outputTranscription: { text: 'Hi.' } }));
+  assert.deepEqual(h.controls().slice(-2), ['AUDIO.COMMITTED', 'RESPONSE.CREATED']);
+  h.emit({ serverContent: { turnComplete: true } });
+  assert.equal(h.controls().at(-1), 'RESPONSE.COMPLETE');
+});
+
+test('the response timeout stays independent of continuously forwarded microphone silence', async () => {
+  const h = setup();
+  await h.start();
+  greeting(h);
+  h.emit({ serverContent: { inputTranscription: { text: 'Are you there?', finished: true } } });
+  for (let index = 0; index < 40; index += 1) {
+    h.clock.advance(20);
+    h.socket.emit('message', Buffer.alloc(640), true);
+  }
+  h.clock.advance(29_199);
+  h.socket.emit('message', Buffer.alloc(640), true);
+  assert.equal(h.calls.input.length, 41, 'silence is forwarded even while the reply watchdog is armed');
+  assert.equal(h.ends.length, 0);
+  assert.ok(!h.controls().includes('AUDIO.COMMITTED'));
+  h.clock.advance(1);
+  assert.equal(h.ends[0].reason, 'provider_response_timeout');
+  assert.equal(h.controls().at(-1), 'RESPONSE.ERROR');
+  assert.equal(h.clock.timers.size, 0);
 });
 
 test('reconnect restores text history before a short acknowledgement request', async (t) => {
@@ -304,6 +353,35 @@ test('rotation waits for an active reply to flush and complete', async () => {
   h.clock.advance(1);
   assert.equal(h.ends[0].reason, 'session_rotation');
   assert.equal(h.controls().at(-1), 'RESPONSE.COMPLETE');
+});
+
+test('a pending recognized utterance keeps its silence stream across the rotation boundary', async () => {
+  const h = setup({ options: { maxSeconds: 240 } });
+  await h.start();
+  greeting(h);
+  h.clock.advance(224_000);
+  h.emit({ serverContent: { inputTranscription: { text: 'One more question.', finished: true } } });
+  h.socket.emit('message', Buffer.alloc(640, 7), true);
+  h.clock.advance(1000);
+  assert.equal(h.ends.length, 0, 'the rotation waits for the recognized utterance');
+  for (let index = 0; index < 40; index += 1) {
+    h.clock.advance(20);
+    h.socket.emit('message', Buffer.alloc(640), true);
+  }
+  assert.equal(h.calls.input.length, 41, 'all silence still reaches automatic VAD after 225s');
+  assert.ok(!h.controls().includes('AUDIO.COMMITTED'));
+  h.emit(audioContent({ outputTranscription: { text: 'Here is your answer.' } }));
+  h.socket.emit('message', Buffer.alloc(640), true);
+  assert.equal(h.calls.input.length, 41, 'actual model audio still mutes microphone forwarding');
+  h.emit({ serverContent: { turnComplete: true } });
+  assert.equal(h.controls().at(-1), 'RESPONSE.COMPLETE');
+  h.socket.emit('message', Buffer.alloc(640), true);
+  assert.equal(h.calls.input.length, 41, 'idle rotation does not start another input turn');
+  h.clock.advance(999);
+  assert.equal(h.ends.length, 0);
+  h.clock.advance(1);
+  assert.equal(h.ends[0].reason, 'session_rotation');
+  assert.equal(h.calls.providerClose, 1);
 });
 
 test('provider rotation also leaves the just-completed audio a drain grace', async () => {
