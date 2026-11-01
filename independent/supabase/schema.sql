@@ -50,6 +50,10 @@ create table if not exists public.cv_voice_leases (
 );
 create unique index if not exists cv_one_active_lease_per_owner
   on public.cv_voice_leases(owner_id) where state = 'active';
+create index if not exists cv_voice_leases_device_id_idx
+  on public.cv_voice_leases(device_id);
+create index if not exists cv_voice_leases_owner_usage_date_idx
+  on public.cv_voice_leases(owner_id, usage_date);
 
 create table if not exists public.cv_messages (
   id uuid primary key default gen_random_uuid(),
@@ -61,6 +65,8 @@ create table if not exists public.cv_messages (
 );
 create index if not exists cv_messages_owner_created
   on public.cv_messages(owner_id, created_at desc, id desc);
+create index if not exists cv_messages_device_id_idx
+  on public.cv_messages(device_id);
 
 alter table public.cv_settings enable row level security;
 alter table public.cv_devices enable row level security;
@@ -80,15 +86,15 @@ grant all on public.cv_settings, public.cv_devices, public.cv_usage,
   public.cv_voice_leases, public.cv_messages to service_role;
 
 drop policy if exists cv_owner_read_settings on public.cv_settings;
-create policy cv_owner_read_settings on public.cv_settings for select to authenticated using (owner_id = auth.uid());
+create policy cv_owner_read_settings on public.cv_settings for select to authenticated using (owner_id = (select auth.uid()));
 drop policy if exists cv_owner_read_devices on public.cv_devices;
-create policy cv_owner_read_devices on public.cv_devices for select to authenticated using (owner_id = auth.uid());
+create policy cv_owner_read_devices on public.cv_devices for select to authenticated using (owner_id = (select auth.uid()));
 drop policy if exists cv_owner_read_usage on public.cv_usage;
-create policy cv_owner_read_usage on public.cv_usage for select to authenticated using (owner_id = auth.uid());
+create policy cv_owner_read_usage on public.cv_usage for select to authenticated using (owner_id = (select auth.uid()));
 drop policy if exists cv_owner_read_leases on public.cv_voice_leases;
-create policy cv_owner_read_leases on public.cv_voice_leases for select to authenticated using (owner_id = auth.uid());
+create policy cv_owner_read_leases on public.cv_voice_leases for select to authenticated using (owner_id = (select auth.uid()));
 drop policy if exists cv_owner_read_messages on public.cv_messages;
-create policy cv_owner_read_messages on public.cv_messages for select to authenticated using (owner_id = auth.uid());
+create policy cv_owner_read_messages on public.cv_messages for select to authenticated using (owner_id = (select auth.uid()));
 
 create or replace function public.cv_reserve_session(
   p_owner_id uuid, p_device_id uuid, p_daily_seconds integer, p_session_seconds integer

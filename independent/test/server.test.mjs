@@ -225,3 +225,13 @@ test("current Supabase publishable and secret variable names configure the priva
   assert.equal(config.supabaseServiceRoleKey, "sb_secret_test_only");
   assert.ok(!JSON.stringify(publicConfig(config)).includes("sb_secret_"));
 });
+
+test("private dashboard secret labels are accepted without exposing or rewriting their values", () => {
+  const config = readConfig({
+    SUPABASE_URL: "https://example.supabase.co", SUPABASE_ANON_KEY: "sb_publishable_test_only", Supabase_Secret_Key: "sb_secret_test_only",
+    OWNER_EMAIL: "owner@example.com", APP_ORIGIN: "https://voice.example.com", Gemini_Key: "test_only_provider_key",
+  });
+  assert.equal(config.configured, true);
+  assert.equal(config.geminiApiKey, "test_only_provider_key");
+  assert.ok(!JSON.stringify(publicConfig(config)).includes("test_only"));
+});

@@ -23,10 +23,10 @@ export function readConfig(env = process.env) {
   const config = {
     supabaseUrl: required("SUPABASE_URL").replace(/\/$/, ""),
     supabaseAnonKey: required("SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY"),
-    supabaseServiceRoleKey: required("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY"),
+    supabaseServiceRoleKey: required("SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY", "Supabase_Secret_Key"),
     ownerEmail: required("OWNER_EMAIL").toLowerCase(),
     appOrigin: required("APP_ORIGIN").replace(/\/$/, ""),
-    geminiApiKey: required("GEMINI_API_KEY"),
+    geminiApiKey: required("GEMINI_API_KEY", "Gemini_Key"),
     model: env.GEMINI_MODEL?.trim() || FREE_MODELS[0],
     appName: (env.APP_NAME?.trim() || "Cardputer Voice").slice(0, 60),
   };
