@@ -67,6 +67,9 @@ bool isDeviceRegistered() {
 void connectCb() {
   Serial.println("On connecting to Wifi");
   if (isDeviceRegistered())  {
+#if defined(INDEPENDENT_MODE)
+    websocketSetup(ws_server, ws_port, ws_path);
+#else
     if (otaState == OTA_IN_PROGRESS) {
         performOTAUpdate();
     } else if (otaState == OTA_COMPLETE) {
@@ -75,6 +78,7 @@ void connectCb() {
     } else {
         websocketSetup(ws_server, ws_port, ws_path);
     }
+#endif
   } 
 }
 

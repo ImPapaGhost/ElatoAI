@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="A private workspace for your Cardputer voice service.">
+    <title>Cardputer Voice</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to workspace</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Workspace home">
+        <svg class="brand-icon" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+          <rect x="5" y="4" width="30" height="32" rx="7" stroke="currentColor" stroke-width="2"/>
+          <rect x="11" y="10" width="18" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 26h3m4 0h3m4 0h2M12 30h3m4 0h3m4 0h2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <span id="app-name">Cardputer Voice</span>
+      </a>
+      <div class="header-actions">
+        <span class="private-badge"><span aria-hidden="true">◈</span> Private workspace</span>
+        <button id="logout-button" class="button button-quiet" type="button" hidden>Sign out</button>
+      </div>
+    </header>
+
+    <main id="main" class="page-shell">
+      <div id="feedback" class="feedback" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+
+      <section id="loading-panel" class="loading-panel" aria-label="Loading workspace">
+        <span class="loading-dot" aria-hidden="true"></span>
+        <p>Opening your workspace…</p>
+      </section>
+
+      <section id="setup-panel" class="panel setup-panel" aria-labelledby="setup-title" hidden>
+        <div class="eyebrow">SETUP NEEDED</div>
+        <h1 id="setup-title">A few things need connecting.</h1>
+        <p id="setup-description">Finish configuring the private service before signing in.</p>
+        <ul id="missing-settings" class="missing-settings"></ul>
+        <button id="check-setup-button" class="button button-secondary" type="button">Check setup again</button>
+      </section>
+
+      <section id="login-panel" class="panel login-panel" aria-labelledby="login-title" hidden>
+        <div class="eyebrow">YOUR PRIVATE VOICE SERVICE</div>
+        <h1 id="login-title">Welcome back.</h1>
+        <p class="intro-copy">Private access. Sign in with your Supabase owner account.</p>
+        <form id="login-form">
+          <fieldset id="login-fields" class="form-fields">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="username" required>
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" required>
+            <button id="login-button" class="button button-primary login-submit" type="submit">Sign in</button>
+          </fieldset>
+        </form>
+        <p class="small-note">This workspace has no public signup.</p>
+      </section>
+
+      <section id="dashboard" aria-labelledby="dashboard-title" hidden>
+        <div class="workspace-heading">
+          <div>
+            <div class="eyebrow">VOICE WORKSPACE</div>
+            <h1 id="dashboard-title">Make it yours.</h1>
+            <p>Tune the character. Set up your Cardputer. Keep the conversation going.</p>
+          </div>
+          <span id="session-limit" class="session-badge" hidden></span>
+        </div>
+
+        <section class="panel quota-panel" aria-labelledby="quota-title">
+          <div class="quota-label">
+            <span class="eyebrow" id="quota-title">DAILY VOICE BUDGET</span>
+            <span id="quota-used" class="quota-used">0 min used</span>
+          </div>
+          <div class="quota-meter">
+            <div class="quota-summary"><strong id="quota-remaining">0 min</strong><span>remaining today</span></div>
+            <progress id="quota-progress" value="0" max="1" aria-label="Daily voice usage"></progress>
+          </div>
+          <p class="small-note">Voice pauses at the limit; no paid fallback.</p>
+        </section>
+
+        <div class="workspace-grid">
+          <section class="panel character-panel" aria-labelledby="character-title">
+            <div class="panel-heading">
+              <span class="section-number" aria-hidden="true">01</span>
+              <div><h2 id="character-title">Your character</h2><p>A voice and a little personality.</p></div>
+            </div>
+            <form id="settings-form">
+              <fieldset id="settings-fields" class="form-fields">
+                <label for="character-name">Character name</label>
+                <input id="character-name" name="character_name" type="text" maxlength="80" required autocomplete="off" placeholder="For example, Atlas">
+
+                <label for="system-prompt">Character instructions</label>
+                <textarea id="system-prompt" name="system_prompt" rows="7" maxlength="4000" required aria-describedby="prompt-help" placeholder="Describe their personality, how they speak, and what they should help with."></textarea>
+                <p class="field-help" id="prompt-help">Give your character a clear role and the kind of replies you enjoy.</p>
+
+                <div class="settings-pair">
+                  <div class="field-group">
+                    <label for="voice-name">Voice</label>
+                    <select id="voice-name" name="voice_name" required></select>
+                  </div>
+                  <div class="field-group">
+                    <div class="range-label"><label for="volume">Speaker volume</label><output id="volume-value" for="volume">50%</output></div>
+                    <input id="volume" name="volume" type="range" min="0" max="100" step="1" value="50">
+                  </div>
+                </div>
+                <div class="form-footer">
+                  <span class="field-help">Changes apply to new voice sessions.</span>
+                  <button id="save-settings-button" class="button button-primary" type="submit">Save character</button>
+                </div>
+              </fieldset>
+            </form>
+          </section>
+
+          <section class="panel device-panel" aria-labelledby="devices-title">
+            <div class="panel-heading">
+              <span class="section-number" aria-hidden="true">02</span>
+              <div><h2 id="devices-title">Your Cardputer</h2><p>One enabled device at a time.</p></div>
+            </div>
+            <ul id="device-list" class="device-list"></ul>
+            <p id="device-empty" class="empty-copy" hidden>No device yet. Add your Cardputer below to give it access.</p>
+
+            <div id="device-secret" class="device-secret" aria-labelledby="token-title" hidden>
+              <h3 id="token-title">Save your device token</h3>
+              <p>This token is shown once. Put it in your private firmware configuration and do not share it.</p>
+              <code id="device-token" class="token-value" tabindex="0" aria-label="New device token"></code>
+              <div class="token-actions">
+                <button id="copy-token-button" class="button button-secondary" type="button">Copy token</button>
+                <button id="dismiss-token-button" class="button button-quiet" type="button">I've saved it</button>
+              </div>
+            </div>
+
+            <div class="device-divider"></div>
+            <h3>Add a device</h3>
+            <p id="device-add-note" class="field-help">Use your Cardputer's Wi-Fi MAC address.</p>
+            <form id="device-form">
+              <fieldset id="device-fields" class="form-fields">
+                <label for="device-name">Device name</label>
+                <input id="device-name" name="name" type="text" maxlength="80" required autocomplete="off" placeholder="My Cardputer">
+                <label for="device-mac">Wi-Fi MAC address</label>
+                <input id="device-mac" name="mac" type="text" required autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF" aria-describedby="device-add-note">
+                <button id="add-device-button" class="button button-secondary" type="submit">Add Cardputer</button>
+              </fieldset>
+            </form>
+          </section>
+        </div>
+
+        <section class="panel conversation-panel" aria-labelledby="conversation-title">
+          <div class="conversation-heading">
+            <div class="panel-heading">
+              <span class="section-number" aria-hidden="true">03</span>
+              <div><h2 id="conversation-title">Recent conversation</h2><p>Messages recorded by your private voice service.</p></div>
+            </div>
+            <button id="refresh-button" class="button button-quiet" type="button">Refresh</button>
+          </div>
+          <p id="messages-empty" class="conversation-empty" hidden><span aria-hidden="true">✦</span>Your first conversation will appear here.</p>
+          <ol id="messages" class="messages"></ol>
+        </section>
+        <footer class="workspace-footer">Made for your Cardputer. Managed by you.</footer>
+      </section>
+    </main>
+  </body>
+</html>

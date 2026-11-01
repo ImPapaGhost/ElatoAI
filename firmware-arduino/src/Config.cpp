@@ -42,7 +42,14 @@ volatile bool sleepRequested = false;
  *   - Uses pre-configured SSL certificates (set in Config.cpp)
  */
 
-#ifdef DEV_MODE
+#if defined(INDEPENDENT_MODE)
+const char *ws_server = CARDPUTER_SERVER_HOST;
+const uint16_t ws_port = 443;
+const char *ws_path = "/ws/esp32";
+const char *backend_server = CARDPUTER_SERVER_HOST;
+const uint16_t backend_port = 443;
+
+#elif defined(DEV_MODE)
 const char *ws_server = "192.168.1.33";
 const char *ws_path = "/";
 
@@ -118,7 +125,11 @@ const gpio_num_t BUTTON_PIN = GPIO_NUM_2; // Only RTC IO are allowed - ESP32 Pin
 // ----------------- SSL Certificates -----------------
 
 
-#ifdef PROD_MODE
+#if defined(INDEPENDENT_MODE)
+const char *Vercel_CA_cert = CARDPUTER_SERVER_CA_CERT;
+const char *CA_cert = CARDPUTER_SERVER_CA_CERT;
+
+#elif defined(PROD_MODE)
 
 // add the CA cert for your backend server here `backend_server`
 const char *Vercel_CA_cert = R"EOF(

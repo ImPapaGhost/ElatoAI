@@ -19,7 +19,11 @@ StatePresentation presentationFor(DeviceState state)
     switch (state)
     {
     case SOFT_AP:
+#if defined(INDEPENDENT_MODE)
+        return {"SET UP WI-FI", "Join CARDPUTER-SETUP", TFT_MAGENTA, TFT_WHITE};
+#else
         return {"SET UP WI-FI", "Join ELATO-DEVICE", TFT_MAGENTA, TFT_WHITE};
+#endif
     case LISTENING:
         return {"LISTENING", "Speak naturally", TFT_YELLOW, TFT_BLACK};
     case PROCESSING:
@@ -38,7 +42,11 @@ StatePresentation presentationFor(DeviceState state)
         return {"WAITING", "Connected", TFT_NAVY, TFT_WHITE};
     case IDLE:
     default:
+#if defined(INDEPENDENT_MODE)
+        return {"READY", "Connecting to your server", TFT_GREEN, TFT_BLACK};
+#else
         return {"READY", "Connecting to ElatoAI", TFT_GREEN, TFT_BLACK};
+#endif
     }
 }
 
@@ -55,7 +63,11 @@ void drawCardputerStatus(DeviceState state)
     display.setTextDatum(middle_left);
     display.setTextSize(1);
     display.setTextColor(TFT_WHITE, TFT_DARKCYAN);
+#if defined(INDEPENDENT_MODE)
+    display.drawString("CARDPUTER VOICE", 8, 12);
+#else
     display.drawString("ELATO AI", 8, 12);
+#endif
 
     const int battery = M5Cardputer.Power.getBatteryLevel();
     if (battery >= 0)
@@ -131,11 +143,17 @@ void ledTask(void *parameter)
             }
             else if (millis() - authResetStarted >= 2000)
             {
+#if !defined(INDEPENDENT_MODE)
                 resetAuth();
+#endif
                 M5Cardputer.Display.fillScreen(TFT_BLACK);
                 M5Cardputer.Display.setTextDatum(middle_center);
                 M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+#if defined(INDEPENDENT_MODE)
+                M5Cardputer.Display.drawString("Reconnecting to server",
+#else
                 M5Cardputer.Display.drawString("Account token cleared",
+#endif
                                                 M5Cardputer.Display.width() / 2,
                                                 M5Cardputer.Display.height() / 2 - 8);
                 M5Cardputer.Display.drawString("Restarting...",

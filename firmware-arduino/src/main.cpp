@@ -106,9 +106,15 @@ static void onButtonDoubleClickCb(void *button_handle, void *usr_data) {
 #endif
 
 void getAuthTokenFromNVS() {
+#if defined(INDEPENDENT_MODE)
+  // A MAC address identifies the device; it is not an authentication secret.
+  // Independent builds use the revocable random credential issued by the owner.
+  authTokenGlobal = CARDPUTER_DEVICE_TOKEN;
+#else
   preferences.begin("auth", false);
   authTokenGlobal = preferences.getString("auth_token", "");
   preferences.end();
+#endif
 }
 
 void setupWiFi() {
@@ -118,7 +124,11 @@ void setupWiFi() {
   WifiManager.setSoftApTimeout(10 * 60 * 1000UL);
 #endif
   WifiManager.startBackgroundTask(
+#if defined(INDEPENDENT_MODE)
+      "CARDPUTER-SETUP");
+#else
       "ELATO-DEVICE"); // Run the background task to take care of our Wifi
+#endif
   WifiManager.fallbackToSoftAp(
       true); // Run a SoftAP if no known AP can be reached
   WifiManager.attachWebServer(&webServer); // Attach our API to the Webserver
@@ -185,7 +195,12 @@ void setupDeviceMetadata() {
   deviceState = IDLE;
 
   getAuthTokenFromNVS();
+#if defined(INDEPENDENT_MODE)
+  // This edition uses USB updates. Ignore any OTA flag left by hosted firmware.
+  otaState = OTA_IDLE;
+#else
   getOTAStatusFromNVS();
+#endif
 
   if (otaState == OTA_IN_PROGRESS || otaState == OTA_COMPLETE) {
     deviceState = OTA;

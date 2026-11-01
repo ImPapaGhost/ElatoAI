@@ -14,7 +14,21 @@
 
 // #define DEV_MODE
 // #define PROD_MODE
+#if !defined(DEV_MODE) && !defined(PROD_MODE) && !defined(INDEPENDENT_MODE) && !defined(ELATO_MODE)
 #define ELATO_MODE
+#endif
+
+#if (defined(DEV_MODE) + defined(PROD_MODE) + defined(INDEPENDENT_MODE) + defined(ELATO_MODE)) != 1
+#error "Select exactly one firmware deployment mode"
+#endif
+
+#if defined(INDEPENDENT_MODE)
+// Local-only deployment host, trusted CA, and revocable device credential.
+// Copy include/PersonalConfig.example.h to include/PersonalConfig.h.
+#include "PersonalConfig.h"
+static_assert(sizeof(CARDPUTER_DEVICE_TOKEN) >= 44,
+              "Set the device token issued by your private dashboard");
+#endif
 
 // ---------- CHOOSE YOUR VOICE SERVER ----------
 // Keep this separate from DEV/PROD/ELATO so the deployment mode and the voice backend stay independent.

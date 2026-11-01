@@ -34,6 +34,7 @@ Realtime AI Speech powered by 100+ Voice AI models on ESP32, with Secure WebSock
 
 - [⌨️ Cardputer installation and setup (start here)](#cardputer-installation-and-setup)
 - [Cardputer firmware details](firmware-arduino/README.md)
+- [Private independent service (preview)](independent/README.md)
 - [Upstream Quick Start / self-hosting](https://www.elatoai.com/docs/quickstart)
 - [Build with PlatformIO](https://www.elatoai.com/docs/platformio)
 - [Build on Arduino IDE](https://www.elatoai.com/docs/arduino)
@@ -41,6 +42,10 @@ Realtime AI Speech powered by 100+ Voice AI models on ESP32, with Secure WebSock
 - [🤖🤖🤖 Deploy multiple devices](https://www.elatoai.com/docs/blog/multiple-devices)
 
 ## Cardputer installation and setup
+
+**Using your own Supabase, Vercel, and Gemini accounts?** See the
+[private independent-service preview](independent/README.md). The steps below
+install the original ElatoAI-hosted edition.
 
 This is an unofficial community port of [ElatoAI](https://github.com/akdeb/ElatoAI)
 for the M5Stack Cardputer. It uses the built-in microphone, speaker, screen, and

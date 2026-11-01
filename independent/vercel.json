@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 300,
+      "includeFiles": "{src,vendor,public}/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/ws/esp32", "destination": "/api/index?route=voice" },
+    { "source": "/api/config", "destination": "/api/index?route=config" },
+    { "source": "/api/login", "destination": "/api/index?route=login" },
+    { "source": "/api/logout", "destination": "/api/index?route=logout" },
+    { "source": "/api/dashboard", "destination": "/api/index?route=dashboard" },
+    { "source": "/api/settings", "destination": "/api/index?route=settings" },
+    { "source": "/api/devices/:id", "destination": "/api/index?route=devices&id=:id" },
+    { "source": "/api/devices", "destination": "/api/index?route=devices" },
+    { "source": "/", "destination": "/index.html" }
+  ],
+  "headers": [{
+    "source": "/(.*)",
+    "headers": [
+      { "key": "X-Content-Type-Options", "value": "nosniff" },
+      { "key": "X-Frame-Options", "value": "DENY" },
+      { "key": "Referrer-Policy", "value": "no-referrer" },
+      { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" }
+    ]
+  }]
+}

@@ -7,6 +7,10 @@
 SemaphoreHandle_t wsMutex;
 WebSocketsClient webSocket;
 
+#if defined(INDEPENDENT_MODE)
+static uint8_t privateReconnectAttempts = 0;
+#endif
+
 // TASK HANDLES
 TaskHandle_t speakerTaskHandle = NULL;
 TaskHandle_t micTaskHandle = NULL;
@@ -360,6 +364,17 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
     {
     case WStype_DISCONNECTED:
         Serial.printf("[WSc] Disconnected!\n");
+#if defined(INDEPENDENT_MODE)
+        {
+        // A used-up daily allowance should not poll the free backend every
+        // five seconds indefinitely. A successful handshake resets the delay.
+        if (privateReconnectAttempts < 7) ++privateReconnectAttempts;
+        const unsigned long retryMs =
+            min(300000UL, 5000UL << (privateReconnectAttempts - 1));
+        webSocket.setReconnectInterval(retryMs);
+        Serial.printf("Private server retry in %lu seconds\n", retryMs / 1000);
+        }
+#endif
         scheduleListeningRestart = false;
         speakingStartTime = 0;
         lastResponseActivityTime = 0;
@@ -373,6 +388,10 @@ void webSocketEvent(WStype_t type, const uint8_t *payload, size_t length)
         break;
     case WStype_CONNECTED:
         Serial.printf("[WSc] Connected to url: %s\n", payload);
+#if defined(INDEPENDENT_MODE)
+        privateReconnectAttempts = 0;
+        webSocket.setReconnectInterval(5000);
+#endif
         opusDecoder.resetState();
         speakingStartTime = 0;
         lastResponseActivityTime = 0;
