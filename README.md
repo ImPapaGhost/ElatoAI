@@ -44,8 +44,8 @@ Realtime AI Speech powered by 100+ Voice AI models on ESP32, with Secure WebSock
 
 ## Easy Cardputer setup (preview)
 
-Install one firmware, enter your Wi-Fi and voice-provider details on the
-Cardputer, and start talking. You do not need an ElatoAI account, a Supabase
+Install one firmware, paste your provider key in the computer setup page, send
+it over USB, and start talking. You do not need an ElatoAI account, a Supabase
 project, your own Vercel deployment, or a `PersonalConfig.h` file for this edition.
 
 1. Connect your original M5Stack Cardputer to a computer with a USB-C **data**
@@ -54,13 +54,15 @@ project, your own Vercel deployment, or a `PersonalConfig.h` file for this editi
    replaces the firmware currently on the device, including Launcher.
 2. Follow the Cardputer's on-screen Wi-Fi setup. Choose your **2.4 GHz** network
    and type its password using the keyboard. Press **Enter** to continue.
-3. Choose your provider: **Gemini**, **ElevenLabs**, or **Hume**. Enter your own
-   provider API key. ElevenLabs also needs your existing **Agent ID**; Hume needs
-   your existing **Config ID**. Create those in the provider's own dashboard first.
-4. Finish the on-screen prompts. Wait for the greeting and **LISTENING**, then
+3. On the computer setup page, **paste your key** and click **Send to Cardputer**.
+   Gemini is the default. Optional ElevenLabs/Hume settings also accept your
+   existing **Agent ID / Config ID**. Choose the USB port when asked.
+4. Press **Enter on the Cardputer** to confirm. Wait for the greeting and **LISTENING**, then
    speak. Your settings are saved for later boots.
 
-To change the key or provider later, hold **Fn + W for two seconds**. Choose
+To change keys later, open [Device settings](https://cardputer-voice.vercel.app/settings)
+on your computer and click **Open Cardputer setup** with the device plugged in.
+You can also hold **Fn + W for two seconds**. Choose
 **Enter: keep Wi-Fi** to avoid typing the Wi-Fi password again, or **Tab: change**
 to choose another network.
 

@@ -9,8 +9,10 @@
   },
   "rewrites": [
     { "source": "/setup", "destination": "/api/index?route=public&path=/setup" },
+    { "source": "/settings", "destination": "/api/index?route=public&path=/settings" },
     { "source": "/setup.html", "destination": "/api/index?route=public&path=/setup.html" },
     { "source": "/setup.css", "destination": "/api/index?route=public&path=/setup.css" },
+    { "source": "/usb-setup.js", "destination": "/api/index?route=public&path=/usb-setup.js" },
     { "source": "/install-button.js", "destination": "/api/index?route=public&path=/install-button.js" },
     { "source": "/installer-LICENSE.txt", "destination": "/api/index?route=public&path=/installer-LICENSE.txt" },
     { "source": "/firmware/:file", "destination": "/api/index?route=public&path=/firmware/:file" },

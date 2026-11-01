@@ -10,6 +10,20 @@
 namespace {
 CardputerProviderConfig providerConfig;
 uint64_t previousKeys = 0;
+bool usbSetupActive = false;
+bool usbSaved = false;
+bool usbCanSkipWifi = false;
+bool usbPending = false;
+bool usbReopenRequested = false;
+unsigned long usbPendingStarted = 0;
+CardputerProviderConfig usbCandidate;
+String usbRequestId;
+String usbLine;
+unsigned long usbLineStarted = 0;
+bool usbDroppingLine = false;
+bool usbOversizeWasFramed = false;
+constexpr size_t USB_FRAME_LIMIT = 1024;
+constexpr char USB_PREFIX[] = "CVSETUP/1 ";
 
 bool identifier(const String &value, size_t minimum, size_t maximum) {
   if (value.length() < minimum || value.length() > maximum) return false;
@@ -29,6 +43,154 @@ bool validProvider(const CardputerProviderConfig &value) {
   return value.provider == "gemini" || identifier(value.referenceId, 1, 128);
 }
 
+bool saveProvider(const CardputerProviderConfig &candidate) {
+  if (!validProvider(candidate)) return false;
+  JsonDocument document;
+  document["provider"] = candidate.provider;
+  document["key"] = candidate.apiKey;
+  document["reference"] = candidate.referenceId;
+  document["voice"] = candidate.voice;
+  String encoded;
+  serializeJson(document, encoded);
+  Preferences saved;
+  bool stored = saved.begin("cvprovider", false);
+  if (stored) { stored = saved.putString("config", encoded) == encoded.length(); saved.end(); }
+  encoded = "";
+  if (stored) providerConfig = candidate;
+  return stored;
+}
+
+bool validRequestId(const String &id) {
+  if (id.isEmpty() || id.length() > 48) return false;
+  for (size_t i = 0; i < id.length(); ++i) {
+    const char c = id[i];
+    if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+          (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+  }
+  return true;
+}
+
+void usbReply(const char *type, const String &id, const char *code = nullptr) {
+  JsonDocument reply;
+  reply["type"] = type;
+  reply["id"] = id;
+  if (strcmp(type, "ready") == 0) reply["protocol"] = 1;
+  if (strcmp(type, "saved") == 0) reply["provider"] = providerConfig.provider;
+  if (code != nullptr) reply["code"] = code;
+  // Only fixed status fields and a validated request ID go back to USB. Never
+  // serialize the request, candidate, reference, key, or parser error details.
+  String encoded;
+  serializeJson(reply, encoded);
+  const String frame = String(USB_PREFIX) + encoded + "\n";
+  Serial.write(reinterpret_cast<const uint8_t *>(frame.c_str()), frame.length());
+}
+
+void clearUsbCandidate() {
+  usbCandidate.apiKey = "";
+  usbCandidate.referenceId = "";
+  usbRequestId = "";
+  usbPending = false;
+  usbPendingStarted = 0;
+}
+
+bool persistSetupRequest() {
+  Preferences saved;
+  if (!saved.begin("cvsetup", false)) return false;
+  const bool stored = saved.putBool("run", true) > 0 && saved.getBool("run", false);
+  saved.end();
+  return stored;
+}
+
+void processUsbFrame(const String &frame) {
+  if (!frame.startsWith(USB_PREFIX)) return;
+  JsonDocument request;
+  if (deserializeJson(request, frame.c_str() + sizeof(USB_PREFIX) - 1,
+                      frame.length() - (sizeof(USB_PREFIX) - 1))) {
+    usbReply("error", "", "invalid_config");
+    return;
+  }
+  const String id = request["id"].is<String>() ? request["id"].as<String>() : String();
+  if (!validRequestId(id)) { usbReply("error", "", "invalid_config"); return; }
+  const String type = request["type"] | "";
+  if (type == "hello") { usbReply("ready", id); return; }
+  if (type == "open_setup") {
+#if defined(EASY_SETUP_MODE)
+    if (usbSetupActive) { usbReply("setup_open", id); return; }
+    if (!usbReopenRequested && !persistSetupRequest()) {
+      usbReply("error", id, "save_failed");
+      return;
+    }
+    usbReopenRequested = true;
+    usbReply("restarting", id);
+#else
+    usbReply("error", id, "not_in_setup");
+#endif
+    return;
+  }
+  if (type != "configure") { usbReply("error", id, "invalid_config"); return; }
+  if (!usbSetupActive) { usbReply("error", id, "not_in_setup"); return; }
+  if (usbPending) { usbReply("error", id, "busy"); return; }
+#if !defined(EASY_SETUP_MODE)
+  usbReply("error", id, "not_in_setup");
+  return;
+#else
+  if (!request["provider"].is<String>() || !request["apiKey"].is<String>() ||
+      (!request["referenceId"].isNull() && !request["referenceId"].is<String>()) ||
+      (!request["voice"].isNull() && !request["voice"].is<String>())) {
+    usbReply("error", id, "invalid_config");
+    return;
+  }
+  CardputerProviderConfig candidate;
+  candidate.provider = request["provider"].as<String>();
+  candidate.apiKey = request["apiKey"].as<String>();
+  candidate.referenceId = request["referenceId"] | "";
+  candidate.voice = request["voice"] | "Aoede";
+  if (!validProvider(candidate)) {
+    candidate.apiKey = "";
+    usbReply("error", id, "invalid_config");
+    return;
+  }
+  usbCandidate = candidate;
+  candidate.apiKey = "";
+  usbRequestId = id;
+  usbPending = true;
+  usbPendingStarted = millis();
+  usbReply("pending", id);
+#endif
+}
+
+void receiveUsbFrames() {
+  if (usbLineStarted != 0 && millis() - usbLineStarted > 5000) {
+    if (usbLine.startsWith(USB_PREFIX)) usbReply("error", "", "invalid_config");
+    usbOversizeWasFramed = false;
+    usbLine = "";
+    usbLineStarted = 0;
+    usbDroppingLine = true;
+  }
+  // Cap work per UI tick as well as retained memory. Oversized or stalled
+  // frames are discarded until a newline before accepting another command.
+  for (size_t processed = 0; processed < 2048 && Serial.available() > 0; ++processed) {
+    const char c = static_cast<char>(Serial.read());
+    if (c == '\n') {
+      if (usbDroppingLine) {
+        if (usbOversizeWasFramed) usbReply("error", "", "invalid_config");
+      } else processUsbFrame(usbLine);
+      usbLine = "";
+      usbLineStarted = 0;
+      usbDroppingLine = false;
+      usbOversizeWasFramed = false;
+    } else if (!usbDroppingLine && c != '\r') {
+      if (usbLine.isEmpty()) usbLineStarted = millis();
+      if (usbLine.length() >= USB_FRAME_LIMIT || (static_cast<uint8_t>(c) < 32 && c != '\t')) {
+        usbOversizeWasFramed = usbLine.startsWith(USB_PREFIX);
+        usbLine = "";
+        usbLineStarted = 0;
+        usbDroppingLine = true;
+      } else usbLine += c;
+    }
+  }
+}
+
 struct KeyEvent {
   bool enter = false;
   bool backspace = false;
@@ -37,6 +199,7 @@ struct KeyEvent {
   bool up = false;
   bool down = false;
   bool clear = false;
+  bool redraw = false;
   String text;
 };
 
@@ -49,7 +212,7 @@ uint64_t keyboardMask() {
   return mask;
 }
 
-KeyEvent readKeys() {
+KeyEvent readPhysicalKeys() {
   M5Cardputer.update();
   KeyEvent event;
   const uint64_t current = keyboardMask();
@@ -98,18 +261,62 @@ void page(const String &title, const String &footer) {
   line(footer, 122, TFT_LIGHTGREY);
 }
 
-void notice(const String &title, const String &message) {
+KeyEvent readKeys() {
+  pollCardputerUsbSetup();
+  if (!usbPending) return readPhysicalKeys();
+  M5Cardputer.update();
+  previousKeys = keyboardMask();
+  bool released = previousKeys == 0;
+  page("Confirm USB voice settings", "Enter: save   Esc: cancel");
+  line("Settings received from your browser.", 37, TFT_CYAN);
+  line("Provider: " + usbCandidate.provider, 59);
+  line("API key stays hidden.", 83, TFT_LIGHTGREY);
+  line("Release keys before confirming.", 103, TFT_LIGHTGREY);
+  while (usbPending) {
+    if (!static_cast<bool>(Serial) || millis() - usbPendingStarted >= 55000) {
+      if (Serial) usbReply("cancelled", usbRequestId);
+      clearUsbCandidate();
+      break;
+    }
+    pollCardputerUsbSetup();
+    const KeyEvent event = readPhysicalKeys();
+    if (!released) {
+      released = keyboardMask() == 0;
+      delay(15);
+      continue;
+    }
+    if (event.escape) {
+      usbReply("cancelled", usbRequestId);
+      clearUsbCandidate();
+    } else if (event.enter) {
+      if (saveProvider(usbCandidate)) {
+        usbSaved = true;
+        usbReply("saved", usbRequestId);
+      } else usbReply("error", usbRequestId, "save_failed");
+      clearUsbCandidate();
+    }
+    delay(15);
+  }
+  KeyEvent result;
+  result.redraw = true;
+  return result;
+}
+
+void notice(const String &title, const String &message, bool providerNotice = false) {
   page(title, "Enter: continue   Esc: back");
   line(message, 42, TFT_YELLOW);
   while (true) {
     const KeyEvent event = readKeys();
+    if (usbSaved && (providerNotice || usbCanSkipWifi)) return;
+    if (event.redraw) { page(title, "Enter: continue   Esc: back"); line(message, 42, TFT_YELLOW); }
     if (event.enter || event.escape) return;
     delay(15);
   }
 }
 
 bool editField(const String &title, const String &label, String &value,
-               size_t maximum, bool secret, bool required, bool restricted = false) {
+               size_t maximum, bool secret, bool required, bool restricted = false,
+               bool providerField = false) {
   bool redraw = true;
   String error;
   while (true) {
@@ -126,6 +333,8 @@ bool editField(const String &title, const String &label, String &value,
       redraw = false;
     }
     const KeyEvent event = readKeys();
+    if (usbSaved && (providerField || usbCanSkipWifi)) return false;
+    if (event.redraw) redraw = true;
     if (event.escape) return false;
     if (event.backspace) {
       if (event.clear) value = "";
@@ -161,6 +370,7 @@ bool setupWifi(WIFIMANAGER &manager) {
   bool manual = false;
   bool rescan = true;
   while (true) {
+    if (usbSaved && usbCanSkipWifi) return true;
     if (rescan) {
       count = 0;
       selected = 0;
@@ -172,6 +382,11 @@ bool setupWifi(WIFIMANAGER &manager) {
       int16_t result = WIFI_SCAN_RUNNING;
       while (millis() - started < 10000) {
         const KeyEvent event = readKeys();
+        if (usbSaved && usbCanSkipWifi) { stopSetupScan(); return true; }
+        if (event.redraw) {
+          page("Wi-Fi setup", "Tab: manual SSID   Esc: browser");
+          line("Searching for 2.4 GHz networks...", 43);
+        }
         if (event.escape) { stopSetupScan(); return false; }
         if (event.tab) { manual = true; break; }
         result = WiFi.scanComplete();
@@ -209,6 +424,8 @@ bool setupWifi(WIFIMANAGER &manager) {
         redraw = false;
       }
       const KeyEvent event = readKeys();
+      if (usbSaved && usbCanSkipWifi) return true;
+      if (event.redraw) redraw = true;
       if (event.escape) return false;
       if (event.tab) { manual = true; break; }
       if (event.text == "r" || event.text == "R") { rescan = true; break; }
@@ -221,12 +438,14 @@ bool setupWifi(WIFIMANAGER &manager) {
 
     String ssid = manual ? String() : networks[selected].ssid;
     if (manual && !editField("Wi-Fi setup", "Network name (SSID)", ssid, 32, false, true)) {
+      if (usbSaved && usbCanSkipWifi) return true;
       manual = false;
       continue;
     }
     String password;
     const bool needsPassword = manual || networks[selected].secured;
     if (needsPassword && !editField("Wi-Fi setup", "Password (blank for open network)", password, 63, true, false)) {
+      if (usbSaved && usbCanSkipWifi) { password = ""; return true; }
       manual = false;
       continue;
     }
@@ -238,6 +457,7 @@ bool setupWifi(WIFIMANAGER &manager) {
     const bool connected = manager.connectAndSaveForSetup(ssid, password, error);
     password = "";
     if (connected) {
+      usbCanSkipWifi = true;
       page("Wi-Fi connected", "Continuing setup...");
       line(ssid, 42, TFT_GREEN);
       line(WiFi.localIP().toString(), 66);
@@ -250,19 +470,45 @@ bool setupWifi(WIFIMANAGER &manager) {
 }
 
 bool setupProvider() {
+  // USB paste/send is the primary path. Keep manual typing available only
+  // when explicitly selected, rather than asking users to type a long key.
+  {
+    bool redraw = true;
+    while (true) {
+      if (usbSaved) return true;
+      if (redraw) {
+        page("Finish setup on computer", "Tab: keyboard   Esc: skip");
+        line("Connect the Cardputer by USB.", 34, TFT_CYAN);
+        line("cardputer-voice.vercel.app/setup", 56);
+        line("Paste key, click Send to Cardputer", 79);
+        line("Then press Enter here to confirm.", 101, TFT_LIGHTGREY);
+        redraw = false;
+      }
+      const KeyEvent event = readKeys();
+      if (usbSaved) return true;
+      if (event.redraw) redraw = true;
+      if (event.escape) return false;
+      if (event.tab) break;
+      delay(15);
+    }
+  }
   const char *ids[] = {"gemini", "elevenlabs", "hume"};
   const char *names[] = {"Gemini", "ElevenLabs", "Hume"};
   uint8_t selected = 0;
   for (uint8_t n = 0; n < 3; ++n) if (providerConfig.provider == ids[n]) selected = n;
   bool redraw = true;
   while (true) {
+    if (usbSaved) return true;
     if (redraw) {
       page("Choose your voice provider", ";/.: up/down   Enter: choose   Esc: skip");
       for (uint8_t n = 0; n < 3; ++n) line(String(n == selected ? "> " : "  ") + names[n], 38 + n * 23,
                                           n == selected ? TFT_CYAN : TFT_WHITE);
+      line("USB: paste key on the setup page", 108, TFT_LIGHTGREY);
       redraw = false;
     }
     const KeyEvent event = readKeys();
+    if (usbSaved) return true;
+    if (event.redraw) redraw = true;
     if (event.escape) return false;
     if (event.up) { selected = (selected + 2) % 3; redraw = true; }
     if (event.down) { selected = (selected + 1) % 3; redraw = true; }
@@ -271,25 +517,22 @@ bool setupProvider() {
     CardputerProviderConfig draft = providerConfig;
     if (draft.provider != ids[selected]) { draft.apiKey = ""; draft.referenceId = ""; }
     draft.provider = ids[selected];
-    if (!editField(names[selected], "API key (always hidden)", draft.apiKey, 256, true, true, true)) { redraw = true; continue; }
-    if (!identifier(draft.apiKey, 16, 256)) { notice("API key not saved", "Key needs 16 to 256 characters"); redraw = true; continue; }
+    if (!editField(names[selected], "API key (always hidden)", draft.apiKey, 256, true, true, true, true)) {
+      draft.apiKey = "";
+      if (usbSaved) return true;
+      redraw = true;
+      continue;
+    }
+    if (!identifier(draft.apiKey, 16, 256)) { notice("API key not saved", "Key needs 16 to 256 characters", true); redraw = true; continue; }
     if (draft.provider == "gemini") draft.referenceId = "";
     else if (!editField(names[selected], draft.provider == "elevenlabs" ? "Your ElevenLabs Agent ID" : "Your Hume Config ID",
-                        draft.referenceId, 128, false, true, true)) { redraw = true; continue; }
-
-    JsonDocument document;
-    document["provider"] = draft.provider;
-    document["key"] = draft.apiKey;
-    document["reference"] = draft.referenceId;
-    document["voice"] = draft.voice;
-    String encoded;
-    serializeJson(document, encoded);
-    Preferences saved;
-    bool stored = saved.begin("cvprovider", false);
-    if (stored) { stored = saved.putString("config", encoded) == encoded.length(); saved.end(); }
-    encoded = "";
-    if (!stored) { draft.apiKey = ""; notice("Provider not saved", "Could not write device settings"); redraw = true; continue; }
-    providerConfig = draft;
+                        draft.referenceId, 128, false, true, true, true)) {
+      draft.apiKey = "";
+      if (usbSaved) return true;
+      redraw = true;
+      continue;
+    }
+    if (!saveProvider(draft)) { draft.apiKey = ""; notice("Provider not saved", "Could not write device settings", true); redraw = true; continue; }
     draft.apiKey = "";
     page("Provider saved", "Starting your voice connection...");
     line(names[selected], 42, TFT_GREEN);
@@ -299,6 +542,14 @@ bool setupProvider() {
   }
 }
 } // namespace
+
+void pollCardputerUsbSetup() { receiveUsbFrames(); }
+
+bool consumeCardputerUsbReopenRequest() {
+  const bool requested = usbReopenRequested;
+  usbReopenRequested = false;
+  return requested;
+}
 
 void loadCardputerProviderConfig() {
   providerConfig = CardputerProviderConfig{};
@@ -331,10 +582,7 @@ bool consumeCardputerSetupRequest() {
 }
 
 void requestCardputerSetupOnNextBoot() {
-  Preferences saved;
-  if (!saved.begin("cvsetup", false)) return;
-  saved.putBool("run", true);
-  saved.end();
+  persistSetupRequest();
 }
 
 void runCardputerBootSetup(WIFIMANAGER &manager, bool force) {
@@ -344,6 +592,15 @@ void runCardputerBootSetup(WIFIMANAGER &manager, bool force) {
 #endif
   bool needsWifi = !manager.configAvailable();
   if (!force && !needsWifi && !needsProvider) return;
+  struct UsbSetupScope {
+    explicit UsbSetupScope(bool savedWifi) {
+      usbSetupActive = true;
+      usbSaved = false;
+      usbCanSkipWifi = savedWifi;
+      clearUsbCandidate();
+    }
+    ~UsbSetupScope() { usbSetupActive = false; clearUsbCandidate(); }
+  } usbScope(manager.configAvailable());
   M5Cardputer.update();
   previousKeys = keyboardMask();
   if (force && manager.configAvailable()) {
@@ -352,6 +609,12 @@ void runCardputerBootSetup(WIFIMANAGER &manager, bool force) {
     line("No password needs to be retyped.", 69);
     while (true) {
       const KeyEvent event = readKeys();
+      if (usbSaved) { needsWifi = false; break; }
+      if (event.redraw) {
+        page("Wi-Fi is already saved", "Enter: keep Wi-Fi   Tab: change   Esc: exit");
+        line("Keep your existing Wi-Fi settings?", 43, TFT_CYAN);
+        line("No password needs to be retyped.", 69);
+      }
       if (event.escape) return;
       if (event.enter) break;
       if (event.tab) { needsWifi = true; break; }

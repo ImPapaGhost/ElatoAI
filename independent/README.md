@@ -1,6 +1,7 @@
 # Cardputer Voice — easy setup
 
-Use the Cardputer's keyboard to set up Wi-Fi and your own voice-provider key.
+Choose Wi-Fi on the Cardputer and paste your provider key on the computer.
+The setup page sends the key directly over USB; long keys do not need to be typed.
 The Easy edition uses the shared Cardputer Voice bridge, independently of
 ElatoAI's hosted service. You do not need your own Supabase project, Vercel
 deployment, ElatoAI account, or private firmware configuration file.
@@ -19,15 +20,19 @@ automated checks; the new Easy hardware setup path is still awaiting verificatio
 2. **Connect Wi-Fi on the Cardputer.** Choose your 2.4 GHz network, type its
    password, and press Enter. Use `;` / `.` to move through network choices, or
    Tab to enter a network name manually.
-3. **Choose a provider.** Select Gemini, ElevenLabs, or Hume, and type your own
-   API key. The key is masked on-screen. ElevenLabs also asks for an existing
-   Agent ID; Hume asks for an existing Config ID. See the requirements below.
-4. **Finish setup and talk.** Press Enter through the remaining prompts. When
+3. **Paste and send your key.** In the computer setup page, paste your API key and
+   click **Send to Cardputer**. Gemini is selected by default. Optional ElevenLabs
+   and Hume choices also take the existing Agent ID / Config ID. Choose the USB
+   port when asked. The page sends these values over USB and does not upload or
+   save them on the website.
+4. **Confirm and talk.** Press a fresh **Enter on the Cardputer** to save. When
    the Cardputer greets you and shows **LISTENING**, say a short sentence and
    pause for the reply. Wait for LISTENING before speaking again.
 
-Wi-Fi and provider settings stay saved for later boots. Hold **Fn + W for two
-seconds** to reopen setup. On the saved-Wi-Fi screen, press **Enter** to keep the
+Wi-Fi and provider settings stay saved for later boots. Open the computer's
+[Device settings page](https://cardputer-voice.vercel.app/settings) and click
+**Open Cardputer setup** over USB to change keys later. You can also hold
+**Fn + W for two seconds** to reopen setup. On the saved-Wi-Fi screen, press **Enter** to keep the
 network and change only the provider/key, or **Tab** to change Wi-Fi too.
 Backspace edits a field; **Ctrl + Backspace** clears it. G0 sleep/wake still works.
 
@@ -54,8 +59,8 @@ computer to it.
   and converts Hume's returned mono PCM WAV audio for the Cardputer speaker.
 
 For a cloned voice, create or select a clone supported by your provider account,
-attach it to the ElevenLabs agent or Hume configuration, and enter that existing
-ID on the Cardputer. This reuses the original ElatoAI provider integrations; it
+attach it to the ElevenLabs agent or Hume configuration, and paste that existing
+ID in the computer setup page. This reuses the original ElatoAI provider integrations; it
 does not create a new voice-cloning engine or clone a voice inside Gemini Live.
 
 **Provider costs and permissions still apply.** A provider may require a paid

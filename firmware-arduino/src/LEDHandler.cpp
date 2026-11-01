@@ -144,19 +144,21 @@ void ledTask(void *parameter)
     while (1)
     {
         M5Cardputer.update();
+        pollCardputerUsbSetup();
+        const bool openSetupFromUsb = consumeCardputerUsbReopenRequest();
         if (M5Cardputer.BtnA.wasHold())
         {
             sleepRequested = true;
         }
 
         const auto &keys = M5Cardputer.Keyboard.keysState();
-        if (keys.fn && (M5Cardputer.Keyboard.isKeyPressed('w') ||
-                        M5Cardputer.Keyboard.isKeyPressed('W')))
+        if (openSetupFromUsb || (keys.fn && (M5Cardputer.Keyboard.isKeyPressed('w') ||
+                        M5Cardputer.Keyboard.isKeyPressed('W'))))
         {
-            if (setupShortcutStarted == 0) setupShortcutStarted = millis();
-            else if (millis() - setupShortcutStarted >= 2000)
+            if (!openSetupFromUsb && setupShortcutStarted == 0) setupShortcutStarted = millis();
+            else if (openSetupFromUsb || millis() - setupShortcutStarted >= 2000)
             {
-                requestCardputerSetupOnNextBoot();
+                if (!openSetupFromUsb) requestCardputerSetupOnNextBoot();
                 scheduleListeningRestart = false;
                 deviceState = WAITING;
                 xSemaphoreTake(wsMutex, portMAX_DELAY);
@@ -167,6 +169,7 @@ void ledTask(void *parameter)
                 M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
                 M5Cardputer.Display.drawString("Opening setup...", M5Cardputer.Display.width() / 2,
                                              M5Cardputer.Display.height() / 2);
+                Serial.flush();
                 delay(100);
                 ESP.restart();
             }

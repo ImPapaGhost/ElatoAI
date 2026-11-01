@@ -7,19 +7,20 @@
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/setup.css">
   <script type="module" src="/install-button.js"></script>
+  <script type="module" src="/usb-setup.js"></script>
 </head>
 <body>
   <header class="site-header">
     <a class="brand" href="/setup">Cardputer Voice</a>
-    <a href="https://github.com/ImPapaGhost/ElatoAI/tree/codex/independent-cardputer">Source code</a>
+    <nav class="setup-navigation" aria-label="Device navigation"><a href="/setup">Install</a><a href="/settings">Device settings</a><a href="https://github.com/ImPapaGhost/ElatoAI/tree/codex/independent-cardputer">Source code</a></nav>
   </header>
   <main class="setup-shell">
     <div class="setup-intro">
       <p class="eyebrow">ORIGINAL M5STACK CARDPUTER</p>
-      <h1>Give your Cardputer a voice.</h1>
-      <p>Install once. Choose Wi-Fi and enter your provider key on the Cardputer. Start talking.</p>
+      <h1 id="setup-page-title">Give your Cardputer a voice.</h1>
+      <p id="setup-page-intro">Install once. Paste your key here and send it over USB. Start talking.</p>
     </div>
-    <section class="panel setup-step" aria-labelledby="install-title">
+    <section id="install-panel" class="panel setup-step" aria-labelledby="install-title">
       <div class="step-number">1</div>
       <div>
         <h2 id="install-title">Install through USB</h2>
@@ -33,32 +34,64 @@
         <p class="small-note"><a href="/firmware/cardputer-voice-easy.bin" download>Download app binary</a> · <a href="/firmware/SHA256SUMS.txt">Checksums</a> · <a href="https://github.com/ImPapaGhost/ElatoAI/tree/codex/independent-cardputer/independent">Build instructions and licenses</a></p>
       </div>
     </section>
-    <section class="panel setup-step" aria-labelledby="wifi-title">
-      <div class="step-number">2</div>
+    <section id="provider-settings" class="panel setup-step" aria-labelledby="paste-title">
+      <div id="provider-step-number" class="step-number">2</div>
       <div>
-        <h2 id="wifi-title">Choose Wi-Fi on the Cardputer</h2>
-        <p>Select your 2.4 GHz network and enter its password using the keyboard. Existing saved Wi-Fi can be kept.</p>
-        <p class="small-note">Use the arrow keys (Fn + ; / .) and Enter. Tab opens manual network entry. The Cardputer connects and saves a working password automatically.</p>
+        <h2 id="paste-title">Paste your key. Send it to the Cardputer.</h2>
+        <p>Start with Gemini for a free preset voice. Copy your key from Google AI Studio and paste it below. Close the installer dialog first, and leave the Cardputer on its setup screen.</p>
+        <form id="usb-setup-form" autocomplete="off">
+          <div class="reopen-setup">
+            <button id="usb-open-setup" type="button" class="open-setup-action" disabled>Open Cardputer setup</button>
+            <p class="small-note">Use this whenever you want to change or add provider keys. The Cardputer reopens its setup screen over USB.</p>
+          </div>
+          <label for="usb-api-key" id="usb-api-key-label">Google AI Studio API key</label>
+          <input id="usb-api-key" type="password" placeholder="Paste your key here" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="16" maxlength="256" required>
+          <p class="small-note"><a id="usb-provider-key-link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Open Google AI Studio to copy your existing key</a></p>
+          <details class="provider-options">
+            <summary>Use a cloned-voice provider instead</summary>
+            <label for="usb-provider">Voice provider</label>
+            <select id="usb-provider">
+              <option value="gemini" selected>Gemini — free preset voices</option>
+              <option value="elevenlabs">ElevenLabs — your cloned-voice agent</option>
+              <option value="hume">Hume — your voice configuration</option>
+            </select>
+          </details>
+          <div id="usb-reference-field" hidden>
+            <label for="usb-reference" id="usb-reference-label">Agent / Config ID</label>
+            <input id="usb-reference" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" placeholder="Paste the ID here">
+          </div>
+          <button id="usb-send" class="install-action" type="submit" disabled>Send to Cardputer</button>
+          <p id="usb-status" role="status" aria-live="polite">Loading USB setup…</p>
+        </form>
+        <p class="small-note">Choose the Cardputer’s USB port when asked, then press Enter on the Cardputer to confirm. Your key goes straight to the device over USB and is not saved by this website.</p>
+        <noscript><p>Enable JavaScript in Chrome or Edge on a computer to send settings over USB.</p></noscript>
       </div>
     </section>
-    <section class="panel setup-step" aria-labelledby="provider-title">
+    <section id="wifi-panel" class="panel setup-step" aria-labelledby="wifi-title">
       <div class="step-number">3</div>
       <div>
+        <h2 id="wifi-title">Choose Wi-Fi once, then talk</h2>
+        <p>On the Cardputer, select your 2.4 GHz network and enter its password. Existing saved Wi-Fi is reused.</p>
+        <p class="small-note">Use the arrow keys (Fn + ; / .) and Enter. Tab opens manual network entry. Settings are remembered after saving.</p>
+      </div>
+    </section>
+    <section class="panel setup-providers" aria-labelledby="provider-title">
+      <div>
         <h2 id="provider-title">Choose your voice provider</h2>
-        <p>Enter that provider’s API key on the Cardputer. The key is saved on the device and used by the voice bridge during your connection. It is not saved in our database.</p>
-        <details open>
+        <p>Gemini is the simple starting point. For a cloned voice, use an agent or configuration you have already created at ElevenLabs or Hume.</p>
+        <details>
           <summary>Gemini — start with a free voice</summary>
-          <p>Create a key in <a href="https://aistudio.google.com/apikey">Google AI Studio</a>. Keep the Google project on the Free tier with billing off, then choose Gemini and enter the key on the Cardputer. No Agent ID is needed.</p>
+          <p>Create a key in <a href="https://aistudio.google.com/apikey">Google AI Studio</a>. Keep the Google project on the Free tier with billing off, then paste the key above and send it over USB. No Agent ID is needed.</p>
           <p class="small-note">Google’s Live API uses preset voices. Free access depends on your project’s current quota.</p>
         </details>
         <details>
           <summary>ElevenLabs — use your existing cloned-voice agent</summary>
-          <p>In <a href="https://elevenlabs.io/app/agents">ElevenLabs Agents</a>, choose an agent configured with your voice or clone, personality, and first greeting. Enter its API key and <strong>Agent ID</strong> on the Cardputer.</p>
+          <p>In <a href="https://elevenlabs.io/app/agents">ElevenLabs Agents</a>, choose an agent configured with your voice or clone, personality, and first greeting. Choose ElevenLabs above, paste its API key and <strong>Agent ID</strong>, and send them over USB.</p>
           <p class="small-note">The agent needs PCM 16 kHz input, PCM output, and <code>agent_response_complete</code> enabled in its <a href="https://elevenlabs.io/docs/eleven-agents/customization/events/client-events#agent-response-complete">client events</a>. Cloning and conversations follow your ElevenLabs plan.</p>
         </details>
         <details>
           <summary>Hume — use your existing voice configuration</summary>
-          <p>Choose a configuration in <a href="https://platform.hume.ai/">Hume</a> with your desired voice and personality. Enter your Hume API key and <strong>Config ID</strong> on the Cardputer. Voice access and usage follow your Hume plan.</p>
+          <p>Choose a configuration in <a href="https://platform.hume.ai/">Hume</a> with your desired voice and personality. Choose Hume above, paste its API key and <strong>Config ID</strong>, and send them over USB. Voice access and usage follow your Hume plan.</p>
         </details>
       </div>
     </section>

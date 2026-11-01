@@ -18,6 +18,12 @@ const CardputerProviderConfig &getCardputerProviderConfig();
 bool cardputerProviderConfigured();
 bool consumeCardputerSetupRequest();
 void requestCardputerSetupOnNextBoot();
+// Poll from the normal LED task too, so USB requests outside the boot setup
+// receive a bounded protocol error rather than waiting forever.
+void pollCardputerUsbSetup();
+// The LED task consumes this after USB polling and performs its normal
+// graceful voice disconnect/restart, after the acknowledgement has been sent.
+bool consumeCardputerUsbReopenRequest();
 
 // Call after M5Cardputer.begin() and manager.loadFromNVS(), BEFORE creating
 // LED/audio/network/Wi-Fi tasks. This boot-only UI owns the display/keyboard.
