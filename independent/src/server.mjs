@@ -93,6 +93,17 @@ export function createAppServer(options = {}) {
   const sessions = new Map();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
 
+  function background(promise) {
+    const task = Promise.resolve(promise);
+    // A WebSocket close can end the Vercel invocation before a final database
+    // write completes. Register those writes with the platform lifecycle.
+    if (options.waitUntil) {
+      try { options.waitUntil(task); }
+      catch { console.error("Could not register a voice background write."); }
+    }
+    return task;
+  }
+
   async function owner(req, res) {
     const jar = cookieJar(req);
     if (jar.cv_access) {
@@ -185,7 +196,7 @@ export function createAppServer(options = {}) {
       settled = true;
       clearInterval(authTimer);
       if (lease) {
-        try { await store.finishSession(lease.id, elapsedSeconds); }
+        try { await background(store.finishSession(lease.id, elapsedSeconds)); }
         catch { console.error("Voice allowance settlement failed; the reserved limit remains charged."); }
       }
     }
@@ -221,7 +232,7 @@ export function createAppServer(options = {}) {
           apiKey: config.geminiApiKey,
           model: config.model,
           maxSeconds: Math.min(config.sessionSeconds, lease.maxSeconds),
-          onTranscript: ({ role, content }) => store.appendTranscript(device.owner_id, device.id, role, content),
+          onTranscript: ({ role, content }) => background(store.appendTranscript(device.owner_id, device.id, role, content)),
           onEnd: finish,
         }).then(controller => {
           if (ws.readyState !== WebSocket.OPEN) return controller.close("device-disconnected");

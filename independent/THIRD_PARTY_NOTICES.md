@@ -13,6 +13,8 @@ Runtime packages retain their own license notices in their installed packages:
 
 - `@google/genai`: Apache-2.0.
 - `ws`: MIT.
+- `@vercel/functions`: MIT; keeps final transcript and quota writes alive when
+  a voice connection closes.
 
 Development-only tools include PGlite (Apache-2.0) and Playwright (Apache-2.0).
 `package-lock.json` pins the dependency versions used for this preview.

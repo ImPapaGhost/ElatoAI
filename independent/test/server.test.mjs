@@ -67,7 +67,7 @@ async function fixture(t, overrides = {}) {
     await options.onTranscript({ role: "user", content: "Hello" });
     return { close() { options.deviceSocket.close(); void options.onEnd({ elapsedSeconds: 2, reason: "closed" }); } };
   });
-  const server = createAppServer({ config: { ...testConfig, ...overrides.config }, store, voiceFactory });
+  const server = createAppServer({ config: { ...testConfig, ...overrides.config }, store, voiceFactory, waitUntil: overrides.waitUntil });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = `http://127.0.0.1:${server.address().port}`;
@@ -213,6 +213,19 @@ test("config rejects paid-model switches, unbounded budgets and unsafe app origi
   assert.equal(config.sessionSeconds, 240);
   assert.equal(config.dailyVoiceSeconds, 600);
   assert.ok(!JSON.stringify(publicConfig(config)).includes("private"));
+});
+
+test("transcript and final quota writes are registered with the deployment lifecycle", async t => {
+  const tasks = [];
+  const { address, calls, settled } = await fixture(t, { waitUntil: promise => tasks.push(promise) });
+  const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: { Authorization: `Bearer ${deviceToken}`, "X-Device-Mac": "AA:BB:CC:DD:EE:FF" } });
+  await once(ws, "message");
+  ws.close();
+  await once(ws, "close");
+  await settled;
+  assert.ok(tasks.length >= 2);
+  await Promise.all(tasks);
+  assert.equal(calls.finished.length, 1);
 });
 
 test("current Supabase publishable and secret variable names configure the private service", () => {
