@@ -323,11 +323,15 @@ export async function startVoiceSession({
 
   const controller = { close: (reason = 'server_close') => finish(reason) };
   timer(() => finish('session_limit'), maxSeconds * 1000);
-  const rotationDelay = Math.max(1000, maxSeconds * 1000 - 15_000);
-  timer(() => {
-    rotationRequested = true;
-    rotateWhenDrained();
-  }, rotationDelay);
+  // Full sessions leave headroom for the host deadline. A short, partial quota
+  // lease needs its remaining time instead: rotating after a one-second timer
+  // would otherwise spend the tail allowance on repeated greetings/reconnects.
+  if (maxSeconds > 30) {
+    timer(() => {
+      rotationRequested = true;
+      rotateWhenDrained();
+    }, maxSeconds * 1000 - 15_000);
+  }
   startupTimer = timer(() => fail('provider_startup_timeout'), STARTUP_TIMEOUT_MS);
 
   const startup = (async () => {

@@ -108,3 +108,19 @@ test('BYOK settlement is covered by the Vercel upgrade lifecycle', async t => {
   await Promise.all(lifecycles);
   assert.equal(lifecycles.length, 1);
 });
+
+test('daily allowance exhaustion ends the device session without opening a provider or retry loop', async t => {
+  const lifecycles = [];
+  const { base, calls } = await fixture(t, {
+    waitUntil: promise => lifecycles.push(promise),
+    byokStore: { async reserveSession() { throw new StoreError(429, "This key has used today's voice allowance."); } },
+  });
+  const ws = new WebSocket(`${base}/ws/byok`, { headers });
+  const message = once(ws, 'message');
+  const closed = once(ws, 'close');
+  assert.deepEqual(JSON.parse(String((await message)[0])), { type: 'server', msg: 'SESSION.END' });
+  assert.equal((await closed)[0], 1000);
+  await Promise.all(lifecycles);
+  assert.equal(calls.voice.length, 0);
+  assert.equal(calls.settlements.length, 0);
+});

@@ -254,6 +254,39 @@ test('idle session rotates before its hard deadline without putting Cardputer to
   assert.ok(!h.controls().includes('SESSION.END'));
 });
 
+test('short remaining leases keep their usable time after the greeting instead of rotating in bursts', async (t) => {
+  for (const maxSeconds of [10, 30]) {
+    await t.test(`${maxSeconds}-second remaining lease`, async () => {
+      const h = setup({ options: { maxSeconds } });
+      await h.start();
+      h.clock.advance(3000);
+      greeting(h);
+      h.clock.advance(1000);
+      assert.equal(h.ends.length, 0, 'a greeting ending at 3s must not cause a 4s rotation');
+      h.socket.emit('message', Buffer.alloc(640), true);
+      assert.equal(h.calls.input.length, 1, 'remaining allowance is still usable for microphone input');
+      h.clock.advance(maxSeconds * 1000 - 4001);
+      assert.equal(h.ends.length, 0, 'keep the connection until its hard lease deadline');
+      h.clock.advance(1);
+      assert.deepEqual(h.ends[0], { elapsedSeconds: maxSeconds, reason: 'session_limit' });
+      assert.equal(h.calls.providerClose, 1);
+      assert.equal(h.clock.timers.size, 0);
+      assert.ok(!h.controls().includes('SESSION.END'));
+    });
+  }
+});
+
+test('leases above thirty seconds retain the full fifteen-second rotation headroom', async () => {
+  const h = setup({ options: { maxSeconds: 31 } });
+  await h.start();
+  h.clock.advance(3000);
+  greeting(h);
+  h.clock.advance(12_999);
+  assert.equal(h.ends.length, 0);
+  h.clock.advance(1);
+  assert.deepEqual(h.ends[0], { elapsedSeconds: 16, reason: 'session_rotation' });
+});
+
 test('rotation waits for an active reply to flush and complete', async () => {
   const h = setup({ options: { maxSeconds: 60 } });
   await h.start();

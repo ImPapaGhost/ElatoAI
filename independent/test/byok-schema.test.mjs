@@ -33,7 +33,7 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
   await db.exec(schema);
 
   async function reset() {
-    await db.exec('reset role; truncate public.cv_byok_leases, public.cv_byok_key_days, public.cv_byok_global_days;');
+    await db.exec('reset role; truncate public.cv_byok_credits, public.cv_byok_leases, public.cv_byok_key_days, public.cv_byok_global_days;');
   }
   async function reserve(fingerprint = KEY_A, limits = {}) {
     const result = await db.query('select * from public.cv_byok_reserve_session($1,$2,$3,$4,$5)', [
@@ -226,12 +226,15 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
     await reserve();
     for (const role of ['anon', 'authenticated']) {
       await db.exec(`set role ${role}`);
-      for (const table of ['cv_byok_global_days', 'cv_byok_key_days', 'cv_byok_leases']) {
+      for (const table of ['cv_byok_global_days', 'cv_byok_key_days', 'cv_byok_leases', 'cv_byok_credits']) {
         await rejectsSql(db.query(`select * from public.${table}`), '42501');
         await rejectsSql(db.query(`delete from public.${table}`), '42501');
       }
       await rejectsSql(reserve(), '42501');
       await rejectsSql(finish({ id: UNKNOWN }, 0), '42501');
+      await rejectsSql(db.query(`insert into public.cv_byok_credits
+        (credit_key, usage_date, fingerprint, seconds_credited, reason)
+        values ('visitor-credit', current_date, '${KEY_A}', 600, 'not authorized')`), '42501');
       await db.exec('reset role');
     }
     await db.exec('grant select on public.cv_byok_leases to authenticated; set role authenticated;');
@@ -240,5 +243,19 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
     const functions = await db.query("select prosecdef from pg_proc where proname in ('cv_byok_reserve_session','cv_byok_finish_session')");
     assert.equal(functions.rows.length, 2);
     assert.ok(functions.rows.every(row => row.prosecdef === false));
+  });
+
+  await suite.test('operator recovery credits have a unique incident key and retain original leases', async () => {
+    await reset();
+    await db.exec('set role service_role');
+    const lease = await reserve();
+    await finish(lease, 20);
+    const insert = () => db.query(`insert into public.cv_byok_credits
+      (credit_key, usage_date, fingerprint, seconds_credited, reason)
+      values ('diagnostic-recovery', (clock_timestamp() at time zone 'UTC')::date, $1, 20, 'failed transport test')`, [KEY_A]);
+    await insert();
+    await rejectsSql(insert(), '23505');
+    assert.equal((await db.query('select count(*)::integer as count from public.cv_byok_leases')).rows[0].count, 1);
+    assert.equal((await db.query('select seconds_credited from public.cv_byok_credits')).rows[0].seconds_credited, 20);
   });
 });

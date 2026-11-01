@@ -167,3 +167,19 @@ revoke all on function public.cv_byok_finish_session(uuid, integer)
 grant execute on function public.cv_byok_reserve_session(text, integer, integer, integer, integer)
   to service_role;
 grant execute on function public.cv_byok_finish_session(uuid, integer) to service_role;
+
+-- Operator-only audit trail for exceptional allowance recovery. No public RPC
+-- grants credits, and original session/usage history is retained.
+create table if not exists public.cv_byok_credits (
+  credit_key text primary key check (length(credit_key) between 1 and 100),
+  usage_date date not null,
+  fingerprint text not null check (fingerprint ~ '^[0-9a-f]{64}$'),
+  seconds_credited integer not null check (seconds_credited between 1 and 600),
+  reason text not null check (length(reason) between 1 and 200),
+  created_at timestamptz not null default now(),
+  foreign key (usage_date, fingerprint)
+    references public.cv_byok_key_days(usage_date, fingerprint) on delete cascade
+);
+alter table public.cv_byok_credits enable row level security;
+revoke all on public.cv_byok_credits from public, anon, authenticated;
+grant select, insert on public.cv_byok_credits to service_role;
