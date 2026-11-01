@@ -108,37 +108,33 @@ does not create a new voice-cloning engine or clone a voice inside Gemini Live.
 **Provider costs and permissions still apply.** A provider may require a paid
 plan for an agent, cloned voice, or API access. This service does not grant those
 features or guarantee that they are free. If using Gemini's Free tier, check
-your Google project's billing status and current quota; our cap is not Google's
-promised allowance. There is no automatic paid-provider fallback.
+your Google project's billing status and current quota. There is no automatic
+paid-provider fallback.
 
 [ElevenLabs audio/event setup](https://elevenlabs.io/docs/eleven-agents/customization/events/client-events)
 · [ElevenLabs agent authentication](https://elevenlabs.io/docs/eleven-agents/customization/authentication)
 · [Hume EVI configurations](https://dev.hume.ai/voice/reference/speech-to-speech-evi/chat)
 · [Gemini quotas](https://ai.google.dev/gemini-api/docs/rate-limits)
 
-### Shared preview limits and privacy
+### Shared service limits and privacy
 
-The shared Easy service has deliberately small limits:
+BYOK has no app-imposed daily voice-time allowance or daily connection-count
+allowance. Your provider's quotas, account plan, and charges still apply.
 
-- **10 minutes per provider key per UTC day** (600 seconds).
-- **20 minutes total across all guests per UTC day** (1,200 seconds).
-- At most **100 accepted connection attempts per UTC day** across the service.
 - At most **two simultaneous sessions** overall, and one active session per key.
-- Each connection lasts at most **four minutes** (240 seconds), then reconnects
-  when allowance remains. A short reconnect pause is expected.
+- Each connection lasts at most **four minutes** (240 seconds), then briefly
+  reconnects to stay within the host's connection deadline.
 
-The budget counts connection time, including listening and silence. A normal
-disconnect refunds unused reserved seconds; failed or abandoned connections
-cannot bypass the cap. Accepted attempts are not refunded. Sleep/power off the
-Cardputer when you are finished. The service may be unavailable because a shared
-cap or a provider's own quota has been reached, even if your key still works.
+The shared bridge can be busy or unavailable because of provider or hosting
+limits. Removing daily allowances does not guarantee uninterrupted availability
+or free provider access. Sleep/power off the Cardputer when you are finished.
 
 Your provider key is saved in the Cardputer's NVS settings. The device sends it
 to the shared bridge over verified TLS; the bridge uses it in memory for that
 connection and authenticates with your chosen provider. The bridge does not
 store API keys in Supabase or print them in its logs. Supabase holds only key
-fingerprints, bounded usage counters, and session leases for guest
-accounting. Guest conversations/history are not saved by this bridge; the voice
+fingerprints and session/usage metadata for coordinating guest connections.
+Guest conversations/history are not saved by this bridge; the voice
 provider processes audio under its own terms.
 
 The private-owner dashboard is separate. Guests do not sign into it, receive
@@ -228,9 +224,10 @@ token) and `/ws/byok` (the guest's own provider credential). Browser-only previe
 sign-in protection cannot be completed by an ESP32. The setup screen lists
 missing operator variable names without revealing their values.
 
-Guest limits are fixed in `src/byok-store.mjs` and `supabase/byok.sql`.
-`DAILY_VOICE_SECONDS` controls the **private owner's** daily budget, not the guest
-allowance. `SESSION_SECONDS` can shorten sessions but cannot exceed 240 seconds.
+Guest concurrency and session limits are defined in `src/byok-store.mjs` and
+`supabase/byok.sql`. `DAILY_VOICE_SECONDS` controls the **private owner's** daily
+budget only; it does not limit BYOK usage. `SESSION_SECONDS` can shorten sessions
+but cannot exceed 240 seconds.
 
 ### 3. Use the private-owner dashboard
 
@@ -290,7 +287,8 @@ Before marking 0.3 wireless settings hardware-verified, check one USB pairing,
 fresh physical approval, same-LAN browser Open setup/Send, authenticated Saved,
 reboot persistence, re-pairing invalidation, and the USB fallback on a real
 Cardputer. Voice checks still need real access for each selected provider,
-completion after the last audio packet, reconnects, and allowance exhaustion.
+completion after the last audio packet, reconnects, and provider-quota errors.
+Private-owner budget exhaustion is a separate check.
 Passing local tests does not prove provider account access or a user's clone
 entitlement. Launcher install/switch-back testing is a separate outstanding check.
 

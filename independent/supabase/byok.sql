@@ -1,13 +1,20 @@
 -- Shared bring-your-own-key accounting. This schema stores only SHA-256 key
--- fingerprints, bounded counters, and leases; never API keys, MACs, or chats.
+-- fingerprints, usage statistics, and leases; never API keys, MACs, or chats.
 -- Apply alongside schema.sql. It does not create accounts or change plans.
 
 create table if not exists public.cv_byok_global_days (
   usage_date date primary key,
   used_seconds integer not null default 0 check (used_seconds >= 0),
-  attempts integer not null default 0 check (attempts between 0 and 100),
+  attempts integer not null default 0 check (attempts >= 0),
   updated_at timestamptz not null default now()
 );
+
+-- Upgrade the original table as well as fresh installs: CREATE TABLE IF NOT
+-- EXISTS would otherwise retain its old 100-attempt daily constraint.
+alter table public.cv_byok_global_days
+  drop constraint if exists cv_byok_global_days_attempts_check;
+alter table public.cv_byok_global_days
+  add constraint cv_byok_global_days_attempts_check check (attempts >= 0);
 
 create table if not exists public.cv_byok_key_days (
   usage_date date not null references public.cv_byok_global_days(usage_date) on delete cascade,
@@ -42,7 +49,7 @@ alter table public.cv_byok_key_days enable row level security;
 alter table public.cv_byok_leases enable row level security;
 
 -- No browser/user policies. Only the trusted server may inspect or mutate
--- fingerprints and allowance; provider keys are not authentication to this DB.
+-- fingerprints and usage; provider keys are not authentication to this DB.
 revoke all on public.cv_byok_global_days, public.cv_byok_key_days,
   public.cv_byok_leases from public, anon, authenticated;
 grant select, insert, update, delete on public.cv_byok_global_days,
@@ -59,21 +66,18 @@ language plpgsql security invoker set search_path = '' as $$
 declare
   v_now timestamptz;
   v_date date;
-  v_global_used integer;
-  v_key_used integer;
-  v_attempts integer;
   v_seconds integer;
   v_lease_id uuid;
 begin
   if p_fingerprint is null or p_fingerprint !~ '^[0-9a-f]{64}$' then
     raise exception 'byok_invalid_fingerprint';
   end if;
-  if p_key_daily_seconds is null or p_key_daily_seconds not between 1 and 600
-     or p_global_daily_seconds is null or p_global_daily_seconds not between 1 and 1200
-     or p_session_seconds is null or p_session_seconds not between 1 and 240
-     or p_max_attempts is null or p_max_attempts not between 1 and 100 then
+  if p_session_seconds is null or p_session_seconds not between 1 and 240 then
     raise exception 'byok_invalid_limits';
   end if;
+  -- Keep the five-argument signature during rolling deployments. Legacy
+  -- p_key_daily_seconds, p_global_daily_seconds, and p_max_attempts are
+  -- intentionally ignored: a user's own provider key has no daily app cap.
 
   -- A single short transaction lock covers every key/day and settlement.
   -- No provider/network operations occur while holding this lock.
@@ -81,7 +85,6 @@ begin
   v_now := clock_timestamp();
   v_date := (v_now at time zone 'UTC')::date;
 
-  -- At most 100 accepted reservations/fingerprints per UTC day are created.
   -- Parent deletion prunes old key-day rows and leases through indexed FKs.
   delete from public.cv_byok_global_days where usage_date < v_date - 7;
   update public.cv_byok_leases set state = 'expired',
@@ -98,19 +101,11 @@ begin
 
   insert into public.cv_byok_global_days(usage_date) values (v_date)
     on conflict (usage_date) do nothing;
-  select used_seconds, attempts into v_global_used, v_attempts
-    from public.cv_byok_global_days where usage_date = v_date for update;
-  if v_attempts >= p_max_attempts then raise exception 'byok_attempt_limit'; end if;
-  if v_global_used >= p_global_daily_seconds then raise exception 'byok_global_daily_limit'; end if;
 
   insert into public.cv_byok_key_days(usage_date, fingerprint) values (v_date, p_fingerprint)
     on conflict (usage_date, fingerprint) do nothing;
-  select used_seconds into v_key_used from public.cv_byok_key_days
-    where usage_date = v_date and fingerprint = p_fingerprint for update;
-  if v_key_used >= p_key_daily_seconds then raise exception 'byok_key_daily_limit'; end if;
 
-  v_seconds := least(p_session_seconds, p_key_daily_seconds - v_key_used,
-                    p_global_daily_seconds - v_global_used);
+  v_seconds := p_session_seconds;
   update public.cv_byok_global_days set used_seconds = used_seconds + v_seconds,
     attempts = attempts + 1, updated_at = v_now where usage_date = v_date;
   update public.cv_byok_key_days set used_seconds = used_seconds + v_seconds,
@@ -168,7 +163,7 @@ grant execute on function public.cv_byok_reserve_session(text, integer, integer,
   to service_role;
 grant execute on function public.cv_byok_finish_session(uuid, integer) to service_role;
 
--- Operator-only audit trail for exceptional allowance recovery. No public RPC
+-- Operator-only audit trail for historical usage corrections. No public RPC
 -- grants credits, and original session/usage history is retained.
 create table if not exists public.cv_byok_credits (
   credit_key text primary key check (length(credit_key) between 1 and 100),

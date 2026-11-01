@@ -1,9 +1,6 @@
 import { StoreError } from './store.mjs';
 
 export const BYOK_LIMITS = Object.freeze({
-  perKeyDailySeconds: 600,
-  globalDailySeconds: 1200,
-  globalAttempts: 100,
   maxSessionSeconds: 240,
   maxActiveSessions: 2,
 });
@@ -13,9 +10,6 @@ const FINGERPRINT = /^[0-9a-f]{64}$/;
 function upstreamError(status, data) {
   const code = typeof data?.message === 'string' ? data.message : '';
   const known = {
-    byok_key_daily_limit: [429, 'This key has used today\'s voice allowance.'],
-    byok_global_daily_limit: [429, 'The shared voice allowance has been used for today.'],
-    byok_attempt_limit: [429, 'The service has reached today\'s connection limit.'],
     byok_key_session_active: [409, 'This provider key is already in use.'],
     byok_global_session_limit: [429, 'Both voice sessions are busy. Try again shortly.'],
     byok_lease_not_found: [404, 'Voice session not found.'],
@@ -30,7 +24,7 @@ function upstreamError(status, data) {
 }
 
 /**
- * Service-only allowance store. The caller hashes provider + key before calling
+ * Service-only concurrency and usage store. The caller hashes provider + key before calling
  * reserveSession; neither plaintext provider keys nor device identifiers enter
  * this module. Model authentication remains the voice bridge's responsibility.
  */
@@ -78,10 +72,12 @@ export function createByokStore(config, { fetchImpl = fetch } = {}) {
     }
     const rows = await request('cv_byok_reserve_session', {
       p_fingerprint: fingerprint,
-      p_key_daily_seconds: BYOK_LIMITS.perKeyDailySeconds,
-      p_global_daily_seconds: BYOK_LIMITS.globalDailySeconds,
+      // Retain the RPC signature for rolling deployments. These legacy daily
+      // parameters are ignored by the database; BYOK has no daily allowance.
+      p_key_daily_seconds: null,
+      p_global_daily_seconds: null,
       p_session_seconds: sessionSeconds,
-      p_max_attempts: BYOK_LIMITS.globalAttempts,
+      p_max_attempts: null,
     });
     const lease = Array.isArray(rows) && rows.length === 1 ? rows[0] : null;
     if (!UUID.test(lease?.id || '') || !Number.isInteger(lease.max_seconds) ||

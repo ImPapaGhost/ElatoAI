@@ -91,8 +91,9 @@ For actual cloned voices, use an ElevenLabs agent or Hume configuration with a
 voice available in that provider account. This port reuses ElatoAI's existing
 provider integrations; Gemini's built-in voices are a separate choice.
 Provider charges and account restrictions still apply, and clone access is not
-guaranteed to be free. The shared preview has a 10-minute daily allowance per
-provider key and a 20-minute daily allowance across all guests.
+guaranteed to be free. BYOK has no app-imposed daily voice-time or connection-count
+allowance. Provider quotas still apply; connections briefly rotate within four
+minutes to meet hosting limits.
 
 The original private-owner voice path and the USB setup protocol have been
 checked on an original Cardputer. The new 0.3 wireless settings path has automated

@@ -26,15 +26,15 @@ function rejectsStatus(promise, status) {
   return assert.rejects(promise, error => error instanceof StoreError && error.status === status);
 }
 
-test('BYOK reservations need only service configuration and send only a fingerprint plus fixed caps', async () => {
+test('BYOK reservations send a fingerprint and session duration without daily caps', async () => {
   const { store, calls } = fixture(call => {
     assert.equal(call.url.pathname, '/rest/v1/rpc/cv_byok_reserve_session');
     assert.deepEqual(call.json, {
       p_fingerprint: FINGERPRINT,
-      p_key_daily_seconds: 600,
-      p_global_daily_seconds: 1200,
+      p_key_daily_seconds: null,
+      p_global_daily_seconds: null,
       p_session_seconds: 240,
-      p_max_attempts: 100,
+      p_max_attempts: null,
     });
     assert.equal(call.method, 'POST');
     assert.equal(call.headers.apikey, CONFIG.supabaseServiceRoleKey);
@@ -46,20 +46,19 @@ test('BYOK reservations need only service configuration and send only a fingerpr
   assert.deepEqual(await store.reserveSession(FINGERPRINT), { id: LEASE, maxSeconds: 240 });
   assert.equal(calls.length, 1);
   assert.deepEqual(BYOK_LIMITS, {
-    perKeyDailySeconds: 600, globalDailySeconds: 1200,
-    globalAttempts: 100, maxSessionSeconds: 240, maxActiveSessions: 2,
+    maxSessionSeconds: 240, maxActiveSessions: 2,
   });
 });
 
-test('existing private-owner settings cannot inflate the BYOK budget', async () => {
+test('private-owner daily settings do not impose a budget on BYOK', async () => {
   const { store } = fixture(call => {
-    assert.equal(call.json.p_key_daily_seconds, 600);
-    assert.equal(call.json.p_global_daily_seconds, 1200);
-    assert.equal(call.json.p_max_attempts, 100);
+    assert.equal(call.json.p_key_daily_seconds, null);
+    assert.equal(call.json.p_global_daily_seconds, null);
+    assert.equal(call.json.p_max_attempts, null);
     assert.equal(call.json.p_session_seconds, 45);
-    return [{ id: LEASE, max_seconds: 30 }];
-  }, { ...CONFIG, ownerEmail: '', dailyVoiceSeconds: 999999, globalAttempts: 999999, sessionSeconds: 45 });
-  assert.deepEqual(await store.reserveSession(FINGERPRINT), { id: LEASE, maxSeconds: 30 });
+    return [{ id: LEASE, max_seconds: 45 }];
+  }, { ...CONFIG, ownerEmail: '', dailyVoiceSeconds: 1, globalAttempts: 1, sessionSeconds: 45 });
+  assert.deepEqual(await store.reserveSession(FINGERPRINT), { id: LEASE, maxSeconds: 45 });
 });
 
 test('legacy Supabase service JWTs retain their bearer header and settlement rounds seconds upward', async () => {
@@ -101,10 +100,9 @@ test('missing, unsafe, and excessive service configuration fails closed before H
   }
 });
 
-test('quota and concurrency errors have distinct safe public statuses', async () => {
+test('concurrency and configuration errors have distinct safe public statuses', async () => {
   for (const [message, status] of [
-    ['byok_key_daily_limit', 429], ['byok_global_daily_limit', 429],
-    ['byok_attempt_limit', 429], ['byok_key_session_active', 409],
+    ['byok_key_session_active', 409],
     ['byok_global_session_limit', 429], ['byok_invalid_limits', 503],
   ]) {
     const { store } = fixture(() => Response.json({ message, details: 'private upstream contents' }, { status: 400 }));

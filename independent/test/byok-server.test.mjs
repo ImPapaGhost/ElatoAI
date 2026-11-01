@@ -88,9 +88,9 @@ test('missing provider keys are rejected before any reservation or private-key f
   assert.equal(calls.private, 0);
 });
 
-test('global BYOK allowance fails closed before contacting a provider', async t => {
+test('occupied shared capacity fails before contacting a provider', async t => {
   const { base, calls } = await fixture(t, { byokStore: {
-    async reserveSession() { throw new StoreError(429, 'Shared allowance used.'); },
+    async reserveSession() { throw new StoreError(429, 'Both voice sessions are busy. Try again shortly.'); },
   } });
   const ws = new WebSocket(`${base}/ws/byok`, { headers });
   const [error] = await once(ws, 'error');
@@ -109,17 +109,16 @@ test('BYOK settlement is covered by the Vercel upgrade lifecycle', async t => {
   assert.equal(lifecycles.length, 1);
 });
 
-test('daily allowance exhaustion ends the device session without opening a provider or retry loop', async t => {
+test('a rejected BYOK reservation completes the upgrade lifecycle without sending a sleep instruction', async t => {
   const lifecycles = [];
   const { base, calls } = await fixture(t, {
     waitUntil: promise => lifecycles.push(promise),
-    byokStore: { async reserveSession() { throw new StoreError(429, "This key has used today's voice allowance."); } },
+    byokStore: { async reserveSession() { throw new StoreError(409, 'This provider key is already in use.'); } },
   });
   const ws = new WebSocket(`${base}/ws/byok`, { headers });
-  const message = once(ws, 'message');
-  const closed = once(ws, 'close');
-  assert.deepEqual(JSON.parse(String((await message)[0])), { type: 'server', msg: 'SESSION.END' });
-  assert.equal((await closed)[0], 1000);
+  ws.on('message', () => assert.fail('A busy connection must not send SESSION.END.'));
+  const [error] = await once(ws, 'error');
+  assert.match(error.message, /409/);
   await Promise.all(lifecycles);
   assert.equal(calls.voice.length, 0);
   assert.equal(calls.settlements.length, 0);

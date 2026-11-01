@@ -261,7 +261,7 @@ export function createAppServer(options = {}) {
         settlementStarted = true;
         settlementPromise = background((async () => {
           try { await accounting.finishSession(lease.id, elapsedSeconds); }
-          catch { console.error("Voice allowance settlement failed; the reserved limit remains charged."); }
+          catch { console.error("Voice session settlement failed; the reservation remains until expiry."); }
         })());
       }
       maybeResolveLifecycle();
@@ -336,24 +336,6 @@ export function createAppServer(options = {}) {
         }));
       });
     })().catch(async error => {
-      const dailyLimitMessages = [
-        "This key has used today's voice allowance.",
-        "The shared voice allowance has been used for today.",
-        "The service has reached today's connection limit.",
-      ];
-      if (route(req) === '/ws/byok' && error instanceof StoreError && error.status === 429 &&
-          dailyLimitMessages.includes(error.message) && !socket.destroyed) {
-        // The device already understands SESSION.END. End gracefully instead
-        // of rejecting every retry and leaving its screen cycling indefinitely.
-        wss.handleUpgrade(req, socket, head, ws => {
-          accepted = true;
-          ws.on('error', () => {});
-          ws.once('close', () => { void finish({ reason: 'daily_allowance_exhausted' }); });
-          ws.send(JSON.stringify({ type: 'server', msg: 'SESSION.END' }));
-          ws.close(1000, 'daily_allowance_exhausted');
-        });
-        return;
-      }
       await finish();
       rejectUpgrade(socket, error instanceof StoreError ? error.status : 503);
     }).finally(() => {

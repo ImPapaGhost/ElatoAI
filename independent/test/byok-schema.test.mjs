@@ -20,7 +20,7 @@ async function rejectsSql(promise, code, message) {
 // PGlite executes the real PostgreSQL RPCs, permissions, constraints, and
 // transactions. Its one connection serializes Promise.all calls; this is not
 // a simulation of separate Vercel instances racing on independent connections.
-test('BYOK accounting is bounded, private, atomic, and independent of Auth users', async suite => {
+test('BYOK accounting is private and atomic, with bounded concurrency rather than daily usage caps', async suite => {
   const db = new PGlite();
   suite.after(() => db.close());
   await db.exec(`
@@ -37,7 +37,8 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
   }
   async function reserve(fingerprint = KEY_A, limits = {}) {
     const result = await db.query('select * from public.cv_byok_reserve_session($1,$2,$3,$4,$5)', [
-      fingerprint, limits.key ?? 600, limits.global ?? 1200, limits.session ?? 240, limits.attempts ?? 100,
+      fingerprint, limits.key ?? null, limits.global ?? null,
+      Object.hasOwn(limits, 'session') ? limits.session : 240, limits.attempts ?? null,
     ]);
     return result.rows[0];
   }
@@ -66,7 +67,7 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
     assert.ok(columns.rows.every(row => !/api_key|provider_key|plaintext|mac|transcript|content|owner|user_id/.test(row.column_name)));
   });
 
-  await suite.test('service-role reservation charges both budgets upfront, then refunds once without refunding attempts', async () => {
+  await suite.test('service-role reservation records both counters upfront, then refunds once without refunding attempts', async () => {
     await reset();
     await db.exec('set role service_role');
     const lease = await reserve();
@@ -105,47 +106,75 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
     assert.equal((await db.query("select count(*)::integer as count from public.cv_byok_leases where state='active'")).rows[0].count, 2);
   });
 
-  await suite.test('per-key 600-second daily cap allows only its remaining partial reservation', async () => {
+  await suite.test('the full requested session remains available past the former key and global daily caps', async () => {
     await reset();
     await db.exec('set role service_role');
-    for (const expected of [240, 240, 120]) {
+    for (const expected of [240, 240, 240, 240, 240, 240]) {
       const lease = await reserve();
       assert.equal(lease.max_seconds, expected);
       await finish(lease, expected);
     }
-    await rejectsSql(reserve(), 'P0001', 'byok_key_daily_limit');
-    assert.deepEqual(await usage(), { global_used: 600, attempts: 3, key_used: 600 });
+    assert.deepEqual(await usage(), { global_used: 1440, attempts: 6, key_used: 1440 });
     assert.equal((await reserve(KEY_B)).max_seconds, 240);
   });
 
-  await suite.test('the global daily cap and per-session cap remain independently bounded', async () => {
+  await suite.test('legacy daily and attempt arguments are ignored, including null and formerly invalid values', async () => {
     await reset();
     await db.exec('set role service_role');
-    const first = await reserve(KEY_A, { global: 300 });
-    const second = await reserve(KEY_B, { global: 300 });
-    assert.equal(first.max_seconds, 240);
-    assert.equal(second.max_seconds, 60);
-    await finish(first, 100);
-    const third = await reserve(KEY_C, { global: 300 });
-    assert.equal(third.max_seconds, 140);
-    await finish(second, 60);
-    await finish(third, 140);
-    await rejectsSql(reserve(KEY_A, { global: 300 }), 'P0001', 'byok_global_daily_limit');
-    assert.equal((await usage()).global_used, 300);
+    for (const legacy of [
+      { key: null, global: null, attempts: null },
+      { key: 1, global: 1, attempts: 1 },
+      { key: 0, global: 0, attempts: 0 },
+      { key: -1, global: -1, attempts: -1 },
+      { key: 601, global: 1201, attempts: 101 },
+    ]) {
+      const lease = await reserve(KEY_A, legacy);
+      assert.equal(lease.max_seconds, 240);
+      await finish(lease, 240);
+    }
+    const short = await reserve(KEY_A, { session: 17, key: 1, global: 1, attempts: 1 });
+    assert.equal(short.max_seconds, 17);
+    await finish(short, 86400);
+    assert.deepEqual(await usage(), { global_used: 1217, attempts: 6, key_used: 1217 });
   });
 
-  await suite.test('100 bad-provider startup reservations refunded to zero still exhaust attempts and bound rows', async () => {
+  await suite.test('more than 100 zero-second startup reservations retain statistics without blocking later sessions', async () => {
     await reset();
     await db.exec('set role service_role');
-    for (let i = 0; i < 100; i += 1) {
+    for (let i = 0; i < 105; i += 1) {
       const fingerprint = createHash('sha256').update(`invalid-test-key-${i}`).digest('hex');
       const lease = await reserve(fingerprint);
       await finish(lease, 0);
     }
-    await rejectsSql(reserve(KEY_A), 'P0001', 'byok_attempt_limit');
-    assert.deepEqual(await usage(), { global_used: 0, attempts: 100, key_used: 0 });
-    assert.equal((await db.query('select count(*)::integer as count from public.cv_byok_leases')).rows[0].count, 100);
-    assert.equal((await db.query('select count(*)::integer as count from public.cv_byok_key_days')).rows[0].count, 100);
+    const next = await reserve(KEY_A);
+    assert.equal(next.max_seconds, 240);
+    await finish(next, 0);
+    assert.deepEqual(await usage(), { global_used: 0, attempts: 106, key_used: 0 });
+    assert.equal((await db.query('select count(*)::integer as count from public.cv_byok_leases')).rows[0].count, 106);
+    assert.equal((await db.query('select count(*)::integer as count from public.cv_byok_key_days')).rows[0].count, 106);
+  });
+
+  await suite.test('upgrading an exhausted original day removes its old attempts constraint and preserves usage history', async () => {
+    await reset();
+    await db.exec(`
+      alter table public.cv_byok_global_days drop constraint cv_byok_global_days_attempts_check;
+      alter table public.cv_byok_global_days add constraint cv_byok_global_days_attempts_check
+        check (attempts between 0 and 100);
+      insert into public.cv_byok_global_days(usage_date,used_seconds,attempts)
+        values ((clock_timestamp() at time zone 'UTC')::date,1200,100);
+      insert into public.cv_byok_key_days(usage_date,fingerprint,used_seconds)
+        values ((clock_timestamp() at time zone 'UTC')::date,'${KEY_A}',600);
+    `);
+    await db.exec(schema);
+    await db.exec('set role service_role');
+    const lease = await reserve(KEY_A, { key: 600, global: 1200, attempts: 100 });
+    assert.equal(lease.max_seconds, 240);
+    assert.deepEqual(await usage(), { global_used: 1440, attempts: 101, key_used: 840 });
+    await finish(lease, 240);
+    await db.exec('reset role');
+    await db.exec(schema);
+    assert.deepEqual(await usage(), { global_used: 1440, attempts: 101, key_used: 840 });
+    assert.equal((await db.query('select count(*)::integer as count from public.cv_byok_leases')).rows[0].count, 1);
   });
 
   await suite.test('expired/abandoned leases remain fully charged and cannot be refunded later', async () => {
@@ -206,14 +235,15 @@ test('BYOK accounting is bounded, private, atomic, and independent of Auth users
     }
   });
 
-  await suite.test('invalid limits/fingerprints/elapsed durations are rejected without allowing inflated refunds', async () => {
+  await suite.test('invalid session limits/fingerprints/elapsed durations are rejected without allowing inflated refunds', async () => {
     await reset();
     await db.exec('set role service_role');
-    for (const limits of [{ key: 601 }, { global: 1201 }, { session: 241 }, { attempts: 101 }, { session: 0 }, { key: 0 }]) {
+    for (const limits of [{ session: 241 }, { session: 0 }, { session: -1 }, { session: null }]) {
       await rejectsSql(reserve(KEY_A, limits), 'P0001', 'byok_invalid_limits');
     }
     await rejectsSql(reserve('raw-provider-key'), 'P0001', 'byok_invalid_fingerprint');
     const lease = await reserve();
+    await rejectsSql(db.query('update public.cv_byok_global_days set attempts=-1'), '23514');
     await rejectsSql(finish(lease, -1), 'P0001', 'byok_invalid_elapsed');
     await rejectsSql(finish(lease, null), 'P0001', 'byok_invalid_elapsed');
     await rejectsSql(finish({ id: UNKNOWN }, 0), 'P0001', 'byok_lease_not_found');
