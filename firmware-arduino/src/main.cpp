@@ -333,4 +333,10 @@ void loop() {
   if (otaState == OTA_IN_PROGRESS) {
     loopOTA();
   }
+#if defined(ELATO_CARDPUTER)
+  // Mic/speaker tasks self-delete at each handoff. Block this housekeeping
+  // loop for one tick so the idle task can reclaim their stacks and TCBs.
+  // Audio capture, playback, and networking run in their own tasks.
+  vTaskDelay(1);
+#endif
 }
