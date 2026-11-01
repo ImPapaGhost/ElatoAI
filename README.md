@@ -66,6 +66,27 @@ You can also hold **Fn + W for two seconds**. Choose
 **Enter: keep Wi-Fi** to avoid typing the Wi-Fi password again, or **Tab: change**
 to choose another network.
 
+### Change provider settings over Wi-Fi (0.3 preview)
+
+1. In Device settings, expand **Wireless settings**, plug in the Cardputer, and
+   click **Pair this Cardputer over USB**. Press a fresh **Enter on the Cardputer**
+   to approve pairing this browser.
+2. Keep the computer and Cardputer on the same normal Wi-Fi network. Select the
+   paired Cardputer and enable **Use Wi-Fi for Open setup and Send**. Use recent
+   desktop Chrome or Edge and allow **local network access** if asked.
+3. You can now unplug USB. Click **Open setup over Wi-Fi**, paste the new provider
+   key/ID, and click **Send over Wi-Fi**. Confirm saving with Enter on the Cardputer.
+
+The browser saves dedicated, nonextractable wireless-control CryptoKeys in
+IndexedDB; it does not save provider API keys. New browsers or cleared site data
+need a new USB pairing. Pairing again replaces older browser pairings. These
+controls change provider/key settings, not firmware, and do not require joining
+a hotspot or changing network passwords.
+
+Launcher keeps its own saved Wi-Fi settings; enter Wi-Fi once in Cardputer Voice
+when coming from Launcher. Launcher installation/switching back remains untested
+on our hardware, and we have not submitted this project to its catalog.
+
 For actual cloned voices, use an ElevenLabs agent or Hume configuration with a
 voice available in that provider account. This port reuses ElatoAI's existing
 provider integrations; Gemini's built-in voices are a separate choice.
@@ -73,8 +94,9 @@ Provider charges and account restrictions still apply, and clone access is not
 guaranteed to be free. The shared preview has a 10-minute daily allowance per
 provider key and a 20-minute daily allowance across all guests.
 
-The original private-owner voice path has been tested on a Cardputer. The new
-Easy setup and provider-entry path is still awaiting hardware verification.
+The original private-owner voice path and the USB setup protocol have been
+checked on an original Cardputer. The new 0.3 wireless settings path has automated
+checks; physical Wi-Fi validation is still pending.
 See the [Easy setup guide](independent/README.md#easy-setup-for-your-cardputer)
 for provider requirements, usage limits, privacy, and the optional build command.
 

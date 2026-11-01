@@ -6,6 +6,9 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <esp_wifi.h>
+#if defined(CARDPUTER_WIRELESS_SETUP)
+#include "CardputerWirelessSetup.h"
+#endif
 
 namespace {
 CardputerProviderConfig providerConfig;
@@ -24,6 +27,29 @@ bool usbDroppingLine = false;
 bool usbOversizeWasFramed = false;
 constexpr size_t USB_FRAME_LIMIT = 1024;
 constexpr char USB_PREFIX[] = "CVSETUP/1 ";
+#if defined(CARDPUTER_WIRELESS_SETUP)
+enum class PendingKind : uint8_t { Provider, WirelessPair };
+PendingKind pendingKind = PendingKind::Provider;
+bool pendingFromWireless = false;
+bool wirelessPairCanExit = false;
+bool wirelessPairExit = false;
+#endif
+
+bool providerSetupFinished() {
+  return usbSaved
+#if defined(CARDPUTER_WIRELESS_SETUP)
+    || wirelessPairExit
+#endif
+  ;
+}
+
+bool maySkipWifiSetup() {
+  return (usbSaved && usbCanSkipWifi)
+#if defined(CARDPUTER_WIRELESS_SETUP)
+    || wirelessPairExit
+#endif
+  ;
+}
 
 bool identifier(const String &value, size_t minimum, size_t maximum) {
   if (value.length() < minimum || value.length() > maximum) return false;
@@ -74,7 +100,12 @@ void usbReply(const char *type, const String &id, const char *code = nullptr) {
   JsonDocument reply;
   reply["type"] = type;
   reply["id"] = id;
-  if (strcmp(type, "ready") == 0) reply["protocol"] = 1;
+  if (strcmp(type, "ready") == 0) {
+    reply["protocol"] = 1;
+#if defined(CARDPUTER_WIRELESS_SETUP)
+    reply["wirelessReady"] = cardputerWirelessCryptoReady();
+#endif
+  }
   if (strcmp(type, "saved") == 0) reply["provider"] = providerConfig.provider;
   if (code != nullptr) reply["code"] = code;
   // Only fixed status fields and a validated request ID go back to USB. Never
@@ -91,7 +122,84 @@ void clearUsbCandidate() {
   usbRequestId = "";
   usbPending = false;
   usbPendingStarted = 0;
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  pendingKind = PendingKind::Provider;
+  pendingFromWireless = false;
+#endif
 }
+
+void replyToPending(const char *type, const String &id, const char *code = nullptr) {
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  if (pendingFromWireless) {
+    publishCardputerWirelessSetupResult(id.c_str(), type, code);
+    return;
+  }
+#endif
+  usbReply(type, id, code);
+}
+
+#if defined(CARDPUTER_WIRELESS_SETUP)
+void processWirelessQueue() {
+  pollCardputerWirelessSetup();
+  CardputerWirelessRequest queued;
+  if (!takeCardputerWirelessSetupRequest(queued)) return;
+  const String id = queued.operationId;
+  const unsigned long accepted = queued.acceptedMillis;
+  if (millis() - accepted >= 55000) {
+    memset(&queued, 0, sizeof(queued));
+    publishCardputerWirelessSetupResult(id.c_str(), "cancelled");
+    return;
+  }
+  const char *failure = nullptr;
+  JsonDocument request;
+  CardputerProviderConfig candidate;
+  if (!usbSetupActive) failure = "not_in_setup";
+  else if (usbPending) failure = "busy";
+  else if (deserializeJson(request, static_cast<const char *>(queued.json)) ||
+      !request["provider"].is<String>() || !request["apiKey"].is<String>() ||
+      (!request["referenceId"].isNull() && !request["referenceId"].is<String>()) ||
+      (!request["voice"].isNull() && !request["voice"].is<String>())) failure = "invalid_config";
+  else {
+    candidate.provider = request["provider"].as<String>();
+    candidate.apiKey = request["apiKey"].as<String>();
+    candidate.referenceId = request["referenceId"] | "";
+    candidate.voice = request["voice"] | "Aoede";
+    if (!validProvider(candidate)) failure = "invalid_config";
+  }
+  memset(&queued, 0, sizeof(queued));
+  if (failure != nullptr) publishCardputerWirelessSetupResult(id.c_str(), "error", failure);
+  else {
+    usbCandidate = candidate;
+    usbRequestId = id;
+    usbPending = true;
+    usbPendingStarted = accepted;
+    pendingKind = PendingKind::Provider;
+    pendingFromWireless = true;
+    publishCardputerWirelessSetupResult(id.c_str(), "pending");
+  }
+  candidate.apiKey = "";
+}
+
+bool replyWirelessPairing(const String &id) {
+  CardputerWirelessPairing pairing;
+  if (!pairCardputerWirelessSetup(pairing)) return false;
+  JsonDocument reply;
+  reply["type"] = "paired";
+  reply["id"] = id;
+  reply["deviceId"] = pairing.deviceId;
+  reply["host"] = pairing.host;
+  reply["port"] = pairing.port;
+  reply["ip"] = pairing.ip;
+  reply["controlSecret"] = pairing.controlSecret;
+  String encoded;
+  serializeJson(reply, encoded);
+  const String frame = String(USB_PREFIX) + encoded + "\n";
+  Serial.write(reinterpret_cast<const uint8_t *>(frame.c_str()), frame.length());
+  pairing.controlSecret = "";
+  encoded = "";
+  return true;
+}
+#endif
 
 bool persistSetupRequest() {
   Preferences saved;
@@ -113,6 +221,23 @@ void processUsbFrame(const String &frame) {
   if (!validRequestId(id)) { usbReply("error", "", "invalid_config"); return; }
   const String type = request["type"] | "";
   if (type == "hello") { usbReply("ready", id); return; }
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  if (type == "pair_wireless") {
+#if defined(EASY_SETUP_MODE)
+    if (!usbSetupActive) { usbReply("error", id, "not_in_setup"); return; }
+    if (usbPending) { usbReply("error", id, "busy"); return; }
+    clearUsbCandidate();
+    usbRequestId = id;
+    usbPending = true;
+    usbPendingStarted = millis();
+    pendingKind = PendingKind::WirelessPair;
+    usbReply("pending", id);
+#else
+    usbReply("error", id, "not_in_setup");
+#endif
+    return;
+  }
+#endif
   if (type == "open_setup") {
 #if defined(EASY_SETUP_MODE)
     if (usbSetupActive) { usbReply("setup_open", id); return; }
@@ -155,6 +280,10 @@ void processUsbFrame(const String &frame) {
   usbRequestId = id;
   usbPending = true;
   usbPendingStarted = millis();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  pendingKind = PendingKind::Provider;
+  pendingFromWireless = false;
+#endif
   usbReply("pending", id);
 #endif
 }
@@ -267,14 +396,33 @@ KeyEvent readKeys() {
   M5Cardputer.update();
   previousKeys = keyboardMask();
   bool released = previousKeys == 0;
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  if (pendingKind == PendingKind::WirelessPair) {
+    page("Pair wireless settings", "Enter: pair   Esc: cancel");
+    line("Allow this browser to change", 37, TFT_CYAN);
+    line("settings on your home Wi-Fi?", 59);
+    line("No provider API key is read.", 83, TFT_LIGHTGREY);
+  } else {
+#endif
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  page(pendingFromWireless ? "Confirm wireless voice settings" : "Confirm USB voice settings", "Enter: save   Esc: cancel");
+#else
   page("Confirm USB voice settings", "Enter: save   Esc: cancel");
+#endif
   line("Settings received from your browser.", 37, TFT_CYAN);
   line("Provider: " + usbCandidate.provider, 59);
   line("API key stays hidden.", 83, TFT_LIGHTGREY);
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  }
+#endif
   line("Release keys before confirming.", 103, TFT_LIGHTGREY);
   while (usbPending) {
-    if (!static_cast<bool>(Serial) || millis() - usbPendingStarted >= 55000) {
-      if (Serial) usbReply("cancelled", usbRequestId);
+    bool disconnected = !static_cast<bool>(Serial);
+#if defined(CARDPUTER_WIRELESS_SETUP)
+    if (pendingFromWireless) disconnected = false;
+#endif
+    if (disconnected || millis() - usbPendingStarted >= 55000) {
+      replyToPending("cancelled", usbRequestId);
       clearUsbCandidate();
       break;
     }
@@ -286,13 +434,22 @@ KeyEvent readKeys() {
       continue;
     }
     if (event.escape) {
-      usbReply("cancelled", usbRequestId);
+      replyToPending("cancelled", usbRequestId);
       clearUsbCandidate();
     } else if (event.enter) {
+#if defined(CARDPUTER_WIRELESS_SETUP)
+      if (pendingKind == PendingKind::WirelessPair) {
+        if (replyWirelessPairing(usbRequestId)) wirelessPairExit = wirelessPairCanExit;
+        else usbReply("error", usbRequestId, "save_failed");
+      } else {
+#endif
       if (saveProvider(usbCandidate)) {
         usbSaved = true;
-        usbReply("saved", usbRequestId);
-      } else usbReply("error", usbRequestId, "save_failed");
+        replyToPending("saved", usbRequestId);
+      } else replyToPending("error", usbRequestId, "save_failed");
+#if defined(CARDPUTER_WIRELESS_SETUP)
+      }
+#endif
       clearUsbCandidate();
     }
     delay(15);
@@ -307,7 +464,7 @@ void notice(const String &title, const String &message, bool providerNotice = fa
   line(message, 42, TFT_YELLOW);
   while (true) {
     const KeyEvent event = readKeys();
-    if (usbSaved && (providerNotice || usbCanSkipWifi)) return;
+    if (providerNotice ? providerSetupFinished() : maySkipWifiSetup()) return;
     if (event.redraw) { page(title, "Enter: continue   Esc: back"); line(message, 42, TFT_YELLOW); }
     if (event.enter || event.escape) return;
     delay(15);
@@ -333,7 +490,7 @@ bool editField(const String &title, const String &label, String &value,
       redraw = false;
     }
     const KeyEvent event = readKeys();
-    if (usbSaved && (providerField || usbCanSkipWifi)) return false;
+    if (providerField ? providerSetupFinished() : maySkipWifiSetup()) return false;
     if (event.redraw) redraw = true;
     if (event.escape) return false;
     if (event.backspace) {
@@ -370,7 +527,7 @@ bool setupWifi(WIFIMANAGER &manager) {
   bool manual = false;
   bool rescan = true;
   while (true) {
-    if (usbSaved && usbCanSkipWifi) return true;
+    if (maySkipWifiSetup()) return true;
     if (rescan) {
       count = 0;
       selected = 0;
@@ -382,7 +539,7 @@ bool setupWifi(WIFIMANAGER &manager) {
       int16_t result = WIFI_SCAN_RUNNING;
       while (millis() - started < 10000) {
         const KeyEvent event = readKeys();
-        if (usbSaved && usbCanSkipWifi) { stopSetupScan(); return true; }
+        if (maySkipWifiSetup()) { stopSetupScan(); return true; }
         if (event.redraw) {
           page("Wi-Fi setup", "Tab: manual SSID   Esc: browser");
           line("Searching for 2.4 GHz networks...", 43);
@@ -424,7 +581,7 @@ bool setupWifi(WIFIMANAGER &manager) {
         redraw = false;
       }
       const KeyEvent event = readKeys();
-      if (usbSaved && usbCanSkipWifi) return true;
+      if (maySkipWifiSetup()) return true;
       if (event.redraw) redraw = true;
       if (event.escape) return false;
       if (event.tab) { manual = true; break; }
@@ -438,14 +595,14 @@ bool setupWifi(WIFIMANAGER &manager) {
 
     String ssid = manual ? String() : networks[selected].ssid;
     if (manual && !editField("Wi-Fi setup", "Network name (SSID)", ssid, 32, false, true)) {
-      if (usbSaved && usbCanSkipWifi) return true;
+      if (maySkipWifiSetup()) return true;
       manual = false;
       continue;
     }
     String password;
     const bool needsPassword = manual || networks[selected].secured;
     if (needsPassword && !editField("Wi-Fi setup", "Password (blank for open network)", password, 63, true, false)) {
-      if (usbSaved && usbCanSkipWifi) { password = ""; return true; }
+      if (maySkipWifiSetup()) { password = ""; return true; }
       manual = false;
       continue;
     }
@@ -458,6 +615,9 @@ bool setupWifi(WIFIMANAGER &manager) {
     password = "";
     if (connected) {
       usbCanSkipWifi = true;
+#if defined(CARDPUTER_WIRELESS_SETUP)
+      wirelessPairCanExit = cardputerProviderConfigured();
+#endif
       page("Wi-Fi connected", "Continuing setup...");
       line(ssid, 42, TFT_GREEN);
       line(WiFi.localIP().toString(), 66);
@@ -475,7 +635,7 @@ bool setupProvider() {
   {
     bool redraw = true;
     while (true) {
-      if (usbSaved) return true;
+      if (providerSetupFinished()) return true;
       if (redraw) {
         page("Finish setup on computer", "Tab: keyboard   Esc: skip");
         line("Connect the Cardputer by USB.", 34, TFT_CYAN);
@@ -485,7 +645,7 @@ bool setupProvider() {
         redraw = false;
       }
       const KeyEvent event = readKeys();
-      if (usbSaved) return true;
+      if (providerSetupFinished()) return true;
       if (event.redraw) redraw = true;
       if (event.escape) return false;
       if (event.tab) break;
@@ -498,7 +658,7 @@ bool setupProvider() {
   for (uint8_t n = 0; n < 3; ++n) if (providerConfig.provider == ids[n]) selected = n;
   bool redraw = true;
   while (true) {
-    if (usbSaved) return true;
+    if (providerSetupFinished()) return true;
     if (redraw) {
       page("Choose your voice provider", ";/.: up/down   Enter: choose   Esc: skip");
       for (uint8_t n = 0; n < 3; ++n) line(String(n == selected ? "> " : "  ") + names[n], 38 + n * 23,
@@ -507,7 +667,7 @@ bool setupProvider() {
       redraw = false;
     }
     const KeyEvent event = readKeys();
-    if (usbSaved) return true;
+    if (providerSetupFinished()) return true;
     if (event.redraw) redraw = true;
     if (event.escape) return false;
     if (event.up) { selected = (selected + 2) % 3; redraw = true; }
@@ -519,7 +679,7 @@ bool setupProvider() {
     draft.provider = ids[selected];
     if (!editField(names[selected], "API key (always hidden)", draft.apiKey, 256, true, true, true, true)) {
       draft.apiKey = "";
-      if (usbSaved) return true;
+      if (providerSetupFinished()) return true;
       redraw = true;
       continue;
     }
@@ -528,7 +688,7 @@ bool setupProvider() {
     else if (!editField(names[selected], draft.provider == "elevenlabs" ? "Your ElevenLabs Agent ID" : "Your Hume Config ID",
                         draft.referenceId, 128, false, true, true, true)) {
       draft.apiKey = "";
-      if (usbSaved) return true;
+      if (providerSetupFinished()) return true;
       redraw = true;
       continue;
     }
@@ -543,7 +703,12 @@ bool setupProvider() {
 }
 } // namespace
 
-void pollCardputerUsbSetup() { receiveUsbFrames(); }
+void pollCardputerUsbSetup() {
+  receiveUsbFrames();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  processWirelessQueue();
+#endif
+}
 
 bool consumeCardputerUsbReopenRequest() {
   const bool requested = usbReopenRequested;
@@ -598,8 +763,19 @@ void runCardputerBootSetup(WIFIMANAGER &manager, bool force) {
       usbSaved = false;
       usbCanSkipWifi = savedWifi;
       clearUsbCandidate();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+      wirelessPairExit = false;
+      wirelessPairCanExit = savedWifi && cardputerProviderConfigured();
+      setCardputerWirelessSetupActive(true);
+#endif
     }
-    ~UsbSetupScope() { usbSetupActive = false; clearUsbCandidate(); }
+    ~UsbSetupScope() {
+      usbSetupActive = false;
+      clearUsbCandidate();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+      setCardputerWirelessSetupActive(false);
+#endif
+    }
   } usbScope(manager.configAvailable());
   M5Cardputer.update();
   previousKeys = keyboardMask();
@@ -609,7 +785,7 @@ void runCardputerBootSetup(WIFIMANAGER &manager, bool force) {
     line("No password needs to be retyped.", 69);
     while (true) {
       const KeyEvent event = readKeys();
-      if (usbSaved) { needsWifi = false; break; }
+      if (providerSetupFinished()) { needsWifi = false; break; }
       if (event.redraw) {
         page("Wi-Fi is already saved", "Enter: keep Wi-Fi   Tab: change   Esc: exit");
         line("Keep your existing Wi-Fi settings?", 43, TFT_CYAN);

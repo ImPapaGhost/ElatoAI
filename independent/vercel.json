@@ -13,6 +13,8 @@
     { "source": "/setup.html", "destination": "/api/index?route=public&path=/setup.html" },
     { "source": "/setup.css", "destination": "/api/index?route=public&path=/setup.css" },
     { "source": "/usb-setup.js", "destination": "/api/index?route=public&path=/usb-setup.js" },
+    { "source": "/wireless-setup.js", "destination": "/api/index?route=public&path=/wireless-setup.js" },
+    { "source": "/wireless-setup-ui.js", "destination": "/api/index?route=public&path=/wireless-setup-ui.js" },
     { "source": "/install-button.js", "destination": "/api/index?route=public&path=/install-button.js" },
     { "source": "/installer-LICENSE.txt", "destination": "/api/index?route=public&path=/installer-LICENSE.txt" },
     { "source": "/firmware/:file", "destination": "/api/index?route=public&path=/firmware/:file" },
@@ -30,12 +32,17 @@
     { "source": "/", "destination": "/index.html" }
   ],
   "headers": [{
+    "source": "/",
+    "headers": [{ "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" }]
+  }, {
+    "source": "/index.html",
+    "headers": [{ "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" }]
+  }, {
     "source": "/(.*)",
     "headers": [
       { "key": "X-Content-Type-Options", "value": "nosniff" },
       { "key": "X-Frame-Options", "value": "DENY" },
-      { "key": "Referrer-Policy", "value": "no-referrer" },
-      { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" }
+      { "key": "Referrer-Policy", "value": "no-referrer" }
     ]
   }]
 }

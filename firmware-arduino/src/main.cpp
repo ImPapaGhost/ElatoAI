@@ -4,6 +4,9 @@
 #include "Cardputer.h"
 #if defined(ELATO_CARDPUTER)
 #include "CardputerSetup.h"
+#if defined(CARDPUTER_WIRELESS_SETUP)
+#include "CardputerWirelessSetup.h"
+#endif
 #endif
 #include "FactoryReset.h"
 #include "LEDHandler.h"
@@ -233,7 +236,14 @@ void setup() {
   // Keyboard setup owns the screen/radio before any audio or network tasks run.
   loadCardputerProviderConfig();
   WifiManager.loadFromNVS();
-  runCardputerBootSetup(WifiManager, consumeCardputerSetupRequest());
+  const bool setupRequested = consumeCardputerSetupRequest();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+  initialiseCardputerWirelessSetup();
+  if (setupRequested || !cardputerProviderConfigured()) {
+    WifiManager.beginSavedNetworkForSetup();
+  }
+#endif
+  runCardputerBootSetup(WifiManager, setupRequested);
 #endif
 
 // INTERRUPT

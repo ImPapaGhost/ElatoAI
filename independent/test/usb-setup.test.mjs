@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createUsbSetup, bindUsbSetup } from '../public/usb-setup.js';
+import { createUsbSetup, bindUsbSetup, getUsbSetupController } from '../public/usb-setup.js';
 
 const PREFIX = 'CVSETUP/1 ';
 const SECRET = 'fixture_API_key_1234567890';
@@ -82,6 +82,7 @@ class FakePort {
           if (writeHook) await writeHook(this, frame);
           else if (frame.type === 'hello' && autoHello) this.line({ type: 'ready', id: frame.id, protocol: 1 });
           else if (frame.type === 'configure' && autoPending) this.line({ type: 'pending', id: frame.id });
+          else if (frame.type === 'pair_wireless' && autoPending) this.line({ type: 'pending', id: frame.id });
           else if (frame.type === 'open_setup') this.line({ type: setupReply, id: frame.id });
         }
       },
@@ -113,6 +114,11 @@ class FakePort {
   line(message, fragment = this.options.fragment) { this.raw(`${PREFIX}${JSON.stringify(message)}\r\n`, fragment); }
   get configure() { return this.frames.findLast((frame) => frame.type === 'configure'); }
   approve() { this.line({ type: 'saved', id: this.configure.id, provider: this.configure.provider }); }
+  approvePair(change = {}) {
+    const pair = this.frames.findLast((frame) => frame.type === 'pair_wireless');
+    this.line({ type: 'paired', id: pair.id, deviceId: '001122AABBCC', host: 'cardputer-aabbcc.local',
+      port: 8080, ip: '192.168.1.51', controlSecret: Buffer.from(Array.from({ length: 32 }, (_, index) => index)).toString('base64url'), ...change });
+  }
 }
 
 function setup(portOptions = {}, overrides = {}) {
@@ -556,4 +562,51 @@ test('USB setup never invokes HTTP or browser storage with credentials', async (
     if (localBefore) Object.defineProperty(globalThis, 'localStorage', localBefore); else delete globalThis.localStorage;
     if (sessionBefore) Object.defineProperty(globalThis, 'sessionStorage', sessionBefore); else delete globalThis.sessionStorage;
   }
+});
+
+test('wireless pairing is a credential-free USB command with separate physical approval', async () => {
+  const pairs = [];
+  const h = setup({}, { onPaired: (value) => pairs.push(value) });
+  const pairing = h.controller.pairWireless();
+  await until(() => h.port.frames.some((frame) => frame.type === 'pair_wireless'));
+  assert.deepEqual(h.port.frames, [{ type: 'hello', id: 'request-1' }, { type: 'pair_wireless', id: 'request-2' }]);
+  assert.equal(pairs.length, 0);
+  assert.equal(h.saved.length, 0);
+  h.port.approvePair();
+  const result = await pairing;
+  assert.equal(result.type, 'paired');
+  assert.equal(result.deviceId, '001122AABBCC');
+  assert.equal(result.controlSecret.length, 43);
+  assert.equal(pairs.length, 1);
+  assert.equal(h.saved.length, 0, 'pairing must not falsely clear an API key via onSaved');
+  assert.doesNotMatch(JSON.stringify(h.statuses), new RegExp(result.controlSecret));
+  assertClosed(h);
+});
+
+test('paired metadata is validated before returning a control secret or calling a hook', async (t) => {
+  for (const change of [
+    { deviceId: '001122aabbcc' }, { host: 'attacker.example' }, { host: 'cardputer-ffffff.local' },
+    { port: 80 }, { controlSecret: 'not-a-secret' }, { controlSecret: 'x'.repeat(43) },
+  ]) await t.test(Object.keys(change)[0], async () => {
+    const pairs = [];
+    const h = setup({}, { onPaired: (value) => pairs.push(value) });
+    const pairing = h.controller.pairWireless();
+    const rejected = assert.rejects(pairing, { code: 'protocol' });
+    await until(() => h.port.frames.some((frame) => frame.type === 'pair_wireless'));
+    h.port.approvePair(change);
+    await rejected;
+    assert.equal(pairs.length, 0);
+    assertClosed(h);
+  });
+});
+
+test('the bound USB controller can be reused by the wireless UI without duplicate bindings', () => {
+  const h = setup();
+  const d = dom();
+  assert.equal(getUsbSetupController(d.document), null);
+  const first = bindUsbSetup(d.document, h.options);
+  assert.equal(getUsbSetupController(d.document), first);
+  assert.equal(bindUsbSetup(d.document, h.options), first);
+  assert.equal(typeof first.pairWireless, 'function');
+  assert.equal(h.requests.length, 0);
 });

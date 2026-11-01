@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { createAppServer } from '../src/server.mjs';
 
 async function fixture(t) {
@@ -61,4 +62,19 @@ test('the public asset rewrite cannot serve arbitrary project or private firmwar
     const response = await request(`/api/index?route=public&path=${encodeURIComponent(path)}`);
     assert.equal(response.status, 404);
   }
+});
+
+test('only setup pages allow the paired LAN port, and static dashboard CSP stays strict', async t => {
+  const request = await fixture(t);
+  assert.ok((await request('/settings')).headers.get('content-security-policy').includes('http://*:8080'));
+  assert.ok(!(await request('/')).headers.get('content-security-policy').includes('http://*:8080'));
+  const deployment = JSON.parse(await readFile(new URL('../vercel.json', import.meta.url), 'utf8'));
+  for (const path of ['/', '/index.html']) {
+    const policy = deployment.headers.find(item => item.source === path)?.headers
+      .find(item => item.key === 'Content-Security-Policy')?.value;
+    assert.ok(policy?.includes("connect-src 'self';"));
+    assert.ok(!policy.includes('http://*:8080'));
+  }
+  assert.ok(!deployment.headers.find(item => item.source === '/(.*)').headers
+    .some(item => item.key === 'Content-Security-Policy'));
 });

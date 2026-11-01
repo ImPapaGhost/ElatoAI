@@ -33,6 +33,18 @@ const defaultClock = {
   setTimeout: (callback, delay) => setTimeout(callback, delay),
   clearTimeout: (timer) => clearTimeout(timer),
 };
+const boundControllers = new WeakMap();
+
+function pairedDetails(value) {
+  if (typeof value.deviceId !== 'string' || !/^[0-9A-F]{12}$/.test(value.deviceId) ||
+      value.host !== `cardputer-${value.deviceId.slice(-6).toLowerCase()}.local` ||
+      value.port !== 8080 || typeof value.controlSecret !== 'string' ||
+      !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(value.controlSecret)) {
+    throw new UsbSetupError('protocol');
+  }
+  return { type: 'paired', id: value.id, deviceId: value.deviceId, host: value.host,
+    port: 8080, ip: typeof value.ip === 'string' ? value.ip : '0.0.0.0', controlSecret: value.controlSecret };
+}
 
 class UsbSetupError extends Error {
   constructor(code) {
@@ -81,7 +93,7 @@ export function createUsbSetup({
   navigatorSerial = globalThis.navigator?.serial,
   clock = defaultClock, createId = nonce,
   handshakeTimeoutMs = 6000, confirmationTimeoutMs = 60000,
-  onStatus = () => {}, onSaved = () => {}, onBusy = () => {},
+  onStatus = () => {}, onSaved = () => {}, onBusy = () => {}, onPaired = () => {},
 } = {}) {
   let current;
   const encoder = new TextEncoder();
@@ -163,9 +175,14 @@ export function createUsbSetup({
       if (!wait.pending) {
         wait.pending = true;
         wait.arm(confirmationTimeoutMs, 'confirmation_timeout');
-        notify('confirm', 'Press Enter on the Cardputer to approve saving this key. Press Esc there to cancel.');
+        notify('confirm', wait.kind === 'pair_wireless'
+          ? 'Press Enter on the Cardputer to approve pairing this browser for wireless settings. Press Esc there to cancel.'
+          : 'Press Enter on the Cardputer to approve saving this key. Press Esc there to cancel.');
       }
-    } else if (value.type === 'saved' && wait.pending && value.provider === wait.provider) {
+    } else if (wait.kind === 'pair_wireless' && value.type === 'paired' && wait.pending) {
+      try { wait.finish(null, pairedDetails(value)); }
+      catch { wait.finish(new UsbSetupError('protocol')); }
+    } else if (wait.kind === 'configure' && value.type === 'saved' && wait.pending && value.provider === wait.provider) {
       wait.finish(null, { provider: wait.provider });
     } else wait.finish(new UsbSetupError('protocol'));
   }
@@ -346,6 +363,16 @@ export function createUsbSetup({
             : 'Cardputer is restarting into setup. Wait for its setup screen, then click Send.', 'success');
           return result;
         }
+        if (command === 'pair_wireless') {
+          phase = 'pair_wireless';
+          notify('pairing', 'Requesting wireless pairing over USB. Confirm on the Cardputer.');
+          const requestId = id();
+          const wait = reply(op, 'pair_wireless', requestId, null, handshakeTimeoutMs);
+          const result = await exchange(op, wait, { type: 'pair_wireless', id: requestId });
+          try { Promise.resolve(onPaired(result)).catch(() => {}); } catch {}
+          notify('paired', 'Wireless pairing was approved on the Cardputer.', 'success');
+          return result;
+        }
         phase = 'configure';
         notify('sending', 'Sending directly over USB. Your key is not uploaded by this page.');
         const requestId = id();
@@ -377,12 +404,18 @@ export function createUsbSetup({
     get busy() { return Boolean(current); },
     send: (input) => operate('configure', input),
     openSetup: () => operate('open_setup'),
+    pairWireless: () => operate('pair_wireless'),
     cancel() {
       if (!current) return false;
       stop(current, new UsbSetupError('cancelled'));
       return true;
     },
   };
+}
+
+export function getUsbSetupController(document = globalThis.document) {
+  const form = document?.getElementById('usb-setup-form');
+  return form ? boundControllers.get(form) || null : null;
 }
 
 export function bindUsbSetup(document = globalThis.document, options = {}) {
@@ -399,7 +432,8 @@ export function bindUsbSetup(document = globalThis.document, options = {}) {
     if (step) step.textContent = '1';
   }
   const form = document?.getElementById('usb-setup-form');
-  if (!form || form.dataset.usbSetupBound === 'true') return null;
+  if (!form) return null;
+  if (form.dataset.usbSetupBound === 'true') return boundControllers.get(form) || null;
   const get = (id) => document.getElementById(id);
   const provider = get('usb-provider');
   const apiKey = get('usb-api-key');
@@ -423,9 +457,15 @@ export function bindUsbSetup(document = globalThis.document, options = {}) {
       status.setAttribute('aria-live', 'polite');
       try { options.onStatus?.(update); } catch {}
     },
-    onBusy(value) { active = value; updateFields(); try { options.onBusy?.(value); } catch {} },
+    onBusy(value) {
+      active = value;
+      updateFields();
+      form.dispatchEvent(new Event('cv-usb-state'));
+      try { options.onBusy?.(value); } catch {}
+    },
     onSaved(result) { apiKey.value = ''; try { options.onSaved?.(result); } catch {} },
   });
+  boundControllers.set(form, setup);
   function updateFields() {
     const choice = PROVIDERS[provider.value] || PROVIDERS.gemini;
     referenceField.hidden = !choice.reference;

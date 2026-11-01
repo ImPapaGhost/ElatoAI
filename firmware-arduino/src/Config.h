@@ -21,6 +21,9 @@
 #if (defined(DEV_MODE) + defined(PROD_MODE) + defined(INDEPENDENT_MODE) + defined(ELATO_MODE)) != 1
 #error "Select exactly one firmware deployment mode"
 #endif
+#if defined(CARDPUTER_WIRELESS_SETUP) && !defined(EASY_SETUP_MODE)
+#error "Wireless provider setup requires the Easy edition"
+#endif
 
 #if defined(INDEPENDENT_MODE)
 #if defined(EASY_SETUP_MODE)

@@ -6,9 +6,10 @@ The Easy edition uses the shared Cardputer Voice bridge, independently of
 ElatoAI's hosted service. You do not need your own Supabase project, Vercel
 deployment, ElatoAI account, or private firmware configuration file.
 
-Status: the original private-owner Gemini/Cardputer path has been verified.
-The new Easy installation, provider entry, and cloned-voice adapters have local
-automated checks; the new Easy hardware setup path is still awaiting verification.
+Status: the original private-owner Gemini/Cardputer path and USB 0.2.2 setup
+protocol have been checked on an original Cardputer. Wireless settings in 0.3
+have automated cryptography/UI checks; physical Wi-Fi validation is still pending.
+Cloned-voice access also depends on the real provider account/configuration.
 
 ## Easy setup for your Cardputer
 
@@ -35,6 +36,47 @@ Wi-Fi and provider settings stay saved for later boots. Open the computer's
 **Fn + W for two seconds** to reopen setup. On the saved-Wi-Fi screen, press **Enter** to keep the
 network and change only the provider/key, or **Tab** to change Wi-Fi too.
 Backspace edits a field; **Ctrl + Backspace** clears it. G0 sleep/wake still works.
+
+### Optional: change provider settings over Wi-Fi (0.3 preview)
+
+Start with USB paste above. To let this same browser change settings wirelessly
+later, use Easy firmware 0.3 and pair it once:
+
+1. Open [Device settings](https://cardputer-voice.vercel.app/settings), plug in the
+   Cardputer, and open its setup screen using **Open Cardputer setup** if needed.
+2. Expand **Wireless settings** and click **Pair this Cardputer over USB**. Choose
+   its USB port, then press a fresh **Enter on the Cardputer** to approve.
+3. Select the paired Cardputer and check **Use Wi-Fi for Open setup and Send**.
+   Keep the computer and Cardputer on the same regular Wi-Fi network. Use recent
+   desktop Chrome or Edge and allow **local network access** when the browser asks.
+4. USB can now be unplugged. Click **Open setup over Wi-Fi** to reopen the setup
+   screen. Paste the new key and optional Agent/Config ID, click **Send over Wi-Fi**,
+   and press Enter on the Cardputer to save.
+
+The Wi-Fi checkbox is off by default. Selecting a device or changing that checkbox
+does not contact it; Open setup and Send are the actions that start LAN requests.
+Use the existing network for this flow. There is no hotspot to join and no network
+password to change. Wireless settings currently change the provider/key only;
+they do **not** flash or update firmware. Install future firmware over USB.
+
+Pairing stores a dedicated control-key pair as **nonextractable CryptoKeys in
+IndexedDB**, together with the Cardputer's identifier and local address. Commands
+and verified replies are encrypted for that device. The browser does not save
+provider API keys, and the settings page does not upload them to a cloud server.
+Provider keys remain in the Cardputer's saved settings; the voice bridge's
+separate key handling is described under privacy below.
+
+Pair again over USB if using another browser or after clearing the site's data.
+Each new USB pairing rotates the Cardputer's wireless control secret, so older
+browser pairings stop working. **Forget this pairing** removes this browser's
+saved control keys. If local network access or Wi-Fi reachability fails, USB
+paste remains available.
+
+**Coming from Launcher?** Enter your network once in Cardputer Voice. Launcher
+keeps its own encrypted network passwords, which this port does not automatically
+import. See [Launcher's Wi-Fi encryption implementation](https://github.com/bmorcelli/Launcher/blob/main/src/wifi_crypto.cpp).
+
+### First-boot browser Wi-Fi fallback
 
 If keyboard Wi-Fi setup is unavailable, press Esc to use browser Wi-Fi setup:
 join **CARDPUTER-SETUP** from a phone or computer, then open
@@ -117,7 +159,9 @@ Replace `COM3` with your device's port and close any serial monitor first. This
 target does not require `PersonalConfig.h` and contains no personal API key. Its
 application binary is `.pio/build/m5stack-cardputer-easy/firmware.bin`. Do not
 confuse it with a private-owner binary containing a device token. Launcher SD
-installation of this new Easy target still needs hardware verification.
+installation and switching back to Launcher still need hardware verification.
+We have not submitted this project to the Launcher/M5Burner catalog. The wireless
+settings channel does not install firmware or change that catalog status.
 
 ## Hosting the service / keeping the private-owner edition
 
@@ -235,15 +279,20 @@ connections and private APIs fail closed. Local development listens on loopback.
 Tests use fake providers and do not consume AI quota. They cover embedded
 PostgreSQL accounting/permissions, owner and guest authorization, audio ordering,
 provider formats, connection limits, cleanup, and real Opus WASM encoding.
+Wireless checks also compare real WebCrypto against firmware-compatible AES-GCM
+test vectors, reject replayed/modified replies, validate local addresses, and
+ensure API keys are not persisted by the browser. USB regression checks remain.
 
 For browser QA, install Chrome or a Playwright browser and run `npm run test:ui`.
 It uses mock API responses and writes screenshots to ignored `test-results/`.
 
-Before marking the new Easy path hardware-verified, check a fresh installation,
-keyboard Wi-Fi/key entry, saved-Wi-Fi reuse, each provider with real account
-access, completion after the last audio packet, a reconnect, and allowance
-exhaustion. Passing local tests does not prove provider account access or a
-particular user's clone entitlement.
+Before marking 0.3 wireless settings hardware-verified, check one USB pairing,
+fresh physical approval, same-LAN browser Open setup/Send, authenticated Saved,
+reboot persistence, re-pairing invalidation, and the USB fallback on a real
+Cardputer. Voice checks still need real access for each selected provider,
+completion after the last audio packet, reconnects, and allowance exhaustion.
+Passing local tests does not prove provider account access or a user's clone
+entitlement. Launcher install/switch-back testing is a separate outstanding check.
 
 ## Credits
 

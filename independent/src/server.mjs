@@ -18,6 +18,8 @@ const STATIC_FILES = new Map([
   ["/setup.html", ["setup.html", "text/html; charset=utf-8"]],
   ["/setup.css", ["setup.css", "text/css; charset=utf-8"]],
   ["/usb-setup.js", ["usb-setup.js", "text/javascript; charset=utf-8"]],
+  ["/wireless-setup.js", ["wireless-setup.js", "text/javascript; charset=utf-8"]],
+  ["/wireless-setup-ui.js", ["wireless-setup-ui.js", "text/javascript; charset=utf-8"]],
   ["/install-button.js", ["install-button.js", "text/javascript; charset=utf-8"]],
   ["/installer-LICENSE.txt", ["installer-LICENSE.txt", "text/plain; charset=utf-8"]],
   ["/firmware/manifest.json", ["firmware/manifest.json", "application/json"]],
@@ -28,6 +30,9 @@ const STATIC_FILES = new Map([
   ["/firmware/SHA256SUMS.txt", ["firmware/SHA256SUMS.txt", "text/plain; charset=utf-8"]],
 ]);
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'";
+// Only the setup UI can contact a local control port. Its client additionally
+// restricts targets to paired .local/RFC1918 hosts and authenticates every reply.
+const SETUP_CSP = CSP.replace("connect-src 'self'", "connect-src 'self' http://*:8080");
 
 function headers(res) {
   res.setHeader("Cache-Control", "no-store");
@@ -134,6 +139,9 @@ export function createAppServer(options = {}) {
     headers(res);
     try {
       const path = route(req);
+      if (['/setup', '/setup.html', '/settings'].includes(path)) {
+        res.setHeader('Content-Security-Policy', SETUP_CSP);
+      }
       if (req.method === "GET" && path === "/api/config") {
         return json(res, 200, publicConfig(config));
       }

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/setup.css">
   <script type="module" src="/install-button.js"></script>
   <script type="module" src="/usb-setup.js"></script>
+  <script type="module" src="/wireless-setup-ui.js"></script>
 </head>
 <body>
   <header class="site-header">
@@ -18,7 +19,7 @@
     <div class="setup-intro">
       <p class="eyebrow">ORIGINAL M5STACK CARDPUTER</p>
       <h1 id="setup-page-title">Give your Cardputer a voice.</h1>
-      <p id="setup-page-intro">Install once. Paste your key here and send it over USB. Start talking.</p>
+      <p id="setup-page-intro">Install once. Paste your key here. Send it over USB or paired Wi-Fi.</p>
     </div>
     <section id="install-panel" class="panel setup-step" aria-labelledby="install-title">
       <div class="step-number">1</div>
@@ -38,7 +39,7 @@
       <div id="provider-step-number" class="step-number">2</div>
       <div>
         <h2 id="paste-title">Paste your key. Send it to the Cardputer.</h2>
-        <p>Start with Gemini for a free preset voice. Copy your key from Google AI Studio and paste it below. Close the installer dialog first, and leave the Cardputer on its setup screen.</p>
+        <p id="setup-connection-help">Start with Gemini for a free preset voice. Copy your key from Google AI Studio and paste it below. Close the installer dialog first, and leave the Cardputer on its setup screen.</p>
         <form id="usb-setup-form" autocomplete="off">
           <div class="reopen-setup">
             <button id="usb-open-setup" type="button" class="open-setup-action" disabled>Open Cardputer setup</button>
@@ -47,6 +48,16 @@
           <label for="usb-api-key" id="usb-api-key-label">Google AI Studio API key</label>
           <input id="usb-api-key" type="password" placeholder="Paste your key here" autocomplete="off" autocapitalize="none" spellcheck="false" minlength="16" maxlength="256" required>
           <p class="small-note"><a id="usb-provider-key-link" href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Open Google AI Studio to copy your existing key</a></p>
+          <details id="wireless-settings" class="wireless-options">
+            <summary>Wireless settings (preview) — pair this computer once</summary>
+            <p class="small-note">Pair over USB once. After that, Open setup and Send can work over your home Wi-Fi. Your API key is encrypted before crossing the local network.</p>
+            <button id="wifi-pair" class="open-setup-action" type="button">Pair this Cardputer over USB</button>
+            <label for="wifi-device">Paired Cardputer</label>
+            <select id="wifi-device" aria-label="Paired Cardputer"><option value="">No paired Cardputer yet</option></select>
+            <label class="wireless-toggle"><input id="wifi-enabled" type="checkbox" disabled> Use Wi-Fi for Open setup and Send</label>
+            <button id="wifi-forget" class="open-setup-action" type="button" disabled>Forget this pairing</button>
+            <p id="wifi-status" class="small-note" role="status" aria-live="polite">USB setup is ready. Wireless needs one USB pairing.</p>
+          </details>
           <details class="provider-options">
             <summary>Use a cloned-voice provider instead</summary>
             <label for="usb-provider">Voice provider</label>
@@ -63,7 +74,7 @@
           <button id="usb-send" class="install-action" type="submit" disabled>Send to Cardputer</button>
           <p id="usb-status" role="status" aria-live="polite">Loading USB setup…</p>
         </form>
-        <p class="small-note">Choose the Cardputer’s USB port when asked, then press Enter on the Cardputer to confirm. Your key goes straight to the device over USB and is not saved by this website.</p>
+        <p id="setup-transport-privacy" class="small-note">Choose the Cardputer’s USB port when asked, then press Enter on the Cardputer to confirm. Your API key goes straight to the device and is not saved by this website.</p>
         <noscript><p>Enable JavaScript in Chrome or Edge on a computer to send settings over USB.</p></noscript>
       </div>
     </section>

@@ -19,6 +19,10 @@
 #usb-send:disabled { opacity: .5; cursor: wait; }
 #usb-status { color: var(--mint); font-size: .9rem; overflow-wrap: anywhere; }
 .provider-options { margin: 23px 0; }
+.wireless-options { margin: 24px 0; padding-bottom: 12px; }
+#usb-setup-form .wireless-toggle { display: flex; align-items: flex-start; gap: 9px; font-size: .9rem; }
+#usb-setup-form .wireless-toggle input { width: auto; margin: 5px 0 0; flex: 0 0 auto; }
+#wifi-status { overflow-wrap: anywhere; }
 .setup-providers { margin-top: 24px; }
 .setup-providers p { margin-top: 12px; }
 .install-action { display: inline-block; background: var(--mint); border: 0; border-radius: 8px; padding: 13px 21px; margin: 8px 0 1px; color: var(--canvas); font-weight: 700; }

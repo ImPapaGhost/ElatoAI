@@ -145,6 +145,10 @@ class WIFIMANAGER {
 
     // Load AP Settings from NVS it known apList
     bool loadFromNVS();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+    // Start a saved network for the setup portal without starting voice/tasks.
+    bool beginSavedNetworkForSetup();
+#endif
 };
 
 #endif

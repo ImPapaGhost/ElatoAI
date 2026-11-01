@@ -270,6 +270,30 @@ bool WIFIMANAGER::loadFromNVS() {
  * @return true on success
  * @return false on error with the NVS
  */
+#if defined(CARDPUTER_WIRELESS_SETUP)
+bool WIFIMANAGER::beginSavedNetworkForSetup() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  String preferred;
+  Preferences hint;
+  if (hint.begin("cvsetup", true)) {
+    preferred = hint.getString("ssid", "");
+    hint.end();
+  }
+  uint8_t selected = WIFIMANAGER_MAX_APS;
+  for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; ++i) {
+    if (apList[i].apName.isEmpty()) continue;
+    if (selected == WIFIMANAGER_MAX_APS) selected = i;
+    if (!preferred.isEmpty() && apList[i].apName == preferred) { selected = i; break; }
+  }
+  if (selected == WIFIMANAGER_MAX_APS) return false;
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.begin(apList[selected].apName.c_str(), apList[selected].apPass.c_str());
+  return true;
+}
+#endif
+
 bool WIFIMANAGER::writeToNVS() {
   if (!preferences.begin(NVS, false)) {
     logMessage("[WIFI] Unable to write data to NVS, giving up...");
@@ -505,6 +529,18 @@ void WIFIMANAGER::loop() {
  * @return false on error or no configuration
  */
 bool WIFIMANAGER::tryConnect() {
+  // Setup may have already joined this network. Keep that live LAN connection
+  // so the browser can receive its authenticated save acknowledgement.
+  if (WiFi.status() == WL_CONNECTED) {
+    const String connected = WiFi.SSID();
+    for (uint8_t i = 0; i < WIFIMANAGER_MAX_APS; ++i) {
+      if (!apList[i].apName.isEmpty() && apList[i].apName == connected) {
+        connectCb();
+        stopSoftAP();
+        return true;
+      }
+    }
+  }
   if (!configAvailable()) {
     logMessage("[WIFI] No SSIDs configured in NVS, unable to connect\n");
     if (createFallbackAP) runSoftAP();

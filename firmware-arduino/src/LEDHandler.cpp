@@ -5,6 +5,9 @@
 #include "Cardputer.h"
 #include "CardputerSetup.h"
 #include "Audio.h"
+#if defined(CARDPUTER_WIRELESS_SETUP)
+#include "CardputerWirelessSetup.h"
+#endif
 #include <WiFi.h>
 
 namespace {
@@ -145,7 +148,13 @@ void ledTask(void *parameter)
     {
         M5Cardputer.update();
         pollCardputerUsbSetup();
-        const bool openSetupFromUsb = consumeCardputerUsbReopenRequest();
+#if defined(CARDPUTER_WIRELESS_SETUP)
+        pollCardputerWirelessSetup();
+        const bool openSetupFromWireless = consumeCardputerWirelessReopenRequest();
+#else
+        const bool openSetupFromWireless = false;
+#endif
+        const bool openSetupFromUsb = consumeCardputerUsbReopenRequest() || openSetupFromWireless;
         if (M5Cardputer.BtnA.wasHold())
         {
             sleepRequested = true;
@@ -164,12 +173,22 @@ void ledTask(void *parameter)
                 xSemaphoreTake(wsMutex, portMAX_DELAY);
                 webSocket.disconnect();
                 xSemaphoreGive(wsMutex);
+#if defined(CARDPUTER_WIRELESS_SETUP)
+                if (WiFi.status() == WL_CONNECTED) {
+                    Preferences hint;
+                    if (hint.begin("cvsetup", false)) {
+                        hint.putString("ssid", WiFi.SSID());
+                        hint.end();
+                    }
+                }
+#endif
                 M5Cardputer.Display.fillScreen(TFT_BLACK);
                 M5Cardputer.Display.setTextDatum(middle_center);
                 M5Cardputer.Display.setTextColor(TFT_WHITE, TFT_BLACK);
                 M5Cardputer.Display.drawString("Opening setup...", M5Cardputer.Display.width() / 2,
                                              M5Cardputer.Display.height() / 2);
-                Serial.flush();
+                if (Serial) Serial.flush();
+                // The wireless module already defers its flag for the LAN ACK.
                 delay(100);
                 ESP.restart();
             }
