@@ -16,6 +16,15 @@ const testConfig = {
   sessionSeconds: 240, dailyVoiceSeconds: 600,
 };
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(yes => { resolve = yes; });
+  return { promise, resolve };
+}
+
+const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+const deviceHeaders = { Authorization: `Bearer ${deviceToken}`, "X-Device-Mac": "AA:BB:CC:DD:EE:FF" };
+
 async function fixture(t, overrides = {}) {
   const calls = { leases: [], finished: [], transcripts: [], devices: [], signIns: 0, voice: 0, contexts: 0 };
   let settlementComplete;
@@ -215,7 +224,7 @@ test("config rejects paid-model switches, unbounded budgets and unsafe app origi
   assert.ok(!JSON.stringify(publicConfig(config)).includes("private"));
 });
 
-test("transcript and final quota writes are registered with the deployment lifecycle", async t => {
+test("one deployment lifecycle covers transcript and final quota writes", async t => {
   const tasks = [];
   const { address, calls, settled } = await fixture(t, { waitUntil: promise => tasks.push(promise) });
   const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: { Authorization: `Bearer ${deviceToken}`, "X-Device-Mac": "AA:BB:CC:DD:EE:FF" } });
@@ -223,9 +232,185 @@ test("transcript and final quota writes are registered with the deployment lifec
   ws.close();
   await once(ws, "close");
   await settled;
-  assert.ok(tasks.length >= 2);
+  assert.equal(tasks.length, 1);
   await Promise.all(tasks);
   assert.equal(calls.finished.length, 1);
+});
+
+test("deployment lifecycle is registered synchronously before asynchronous authentication", async t => {
+  const tasks = [];
+  const entered = deferred();
+  const auth = deferred();
+  const { address, calls } = await fixture(t, {
+    waitUntil: promise => tasks.push(promise),
+    store: { async authenticateDevice() {
+      assert.equal(tasks.length, 1, "register within the upgrade request's active context");
+      entered.resolve();
+      await auth.promise;
+      return { id: deviceId, owner_id: ownerId, mac: "AA:BB:CC:DD:EE:FF" };
+    } },
+  });
+  const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: deviceHeaders });
+  await entered.promise;
+  let completed = false;
+  tasks[0].then(() => { completed = true; });
+  await nextTurn();
+  assert.equal(completed, false);
+  auth.resolve();
+  await once(ws, "message");
+  ws.close();
+  await once(ws, "close");
+  await tasks[0];
+  assert.equal(tasks.length, 1);
+  assert.equal(calls.finished.length, 1);
+});
+
+test("socket close waits for every transcript and settlement write", async t => {
+  for (const first of ["history", "settlement"]) {
+    await t.test(`${first} resolves first`, async child => {
+      const tasks = [];
+      const history = deferred();
+      const settlement = deferred();
+      const historyStarted = deferred();
+      const settlementStarted = deferred();
+      let settlementCalls = 0;
+      const { address } = await fixture(child, {
+        waitUntil: promise => tasks.push(promise),
+        store: {
+          async appendTranscript() { historyStarted.resolve(); await history.promise; },
+          async finishSession() { settlementCalls++; settlementStarted.resolve(); await settlement.promise; },
+        },
+        async voiceFactory(options) {
+          options.deviceSocket.send(JSON.stringify({ type: "auth" }));
+          void options.onTranscript({ role: "assistant", content: "Hello" });
+          return { close() { options.deviceSocket.close(); void options.onEnd({ elapsedSeconds: 1 }); } };
+        },
+      });
+      const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: deviceHeaders });
+      await once(ws, "message");
+      let completed = false;
+      tasks[0].then(() => { completed = true; });
+      ws.close();
+      await once(ws, "close");
+      await Promise.all([historyStarted.promise, settlementStarted.promise]);
+      await nextTurn();
+      assert.equal(completed, false);
+      (first === "history" ? history : settlement).resolve();
+      await nextTurn();
+      assert.equal(completed, false, "the other database write still holds the invocation open");
+      (first === "history" ? settlement : history).resolve();
+      await tasks[0];
+      assert.equal(tasks.length, 1);
+      assert.equal(settlementCalls, 1);
+    });
+  }
+});
+
+test("early upgrade rejections resolve their one deployment lifecycle", async t => {
+  for (const status of [401, 404, 503]) {
+    await t.test(String(status), async child => {
+      const tasks = [];
+      const { address, calls } = await fixture(child, {
+        waitUntil: promise => tasks.push(promise),
+        config: status === 503 ? { configured: false } : {},
+      });
+      const path = status === 404 ? "/missing" : "/ws/esp32";
+      const ws = new WebSocket(address.replace("http:", "ws:") + path);
+      const result = await new Promise(resolve => {
+        ws.on("unexpected-response", (_request, response) => {
+          response.resume(); ws.terminate(); resolve(response.statusCode);
+        });
+        ws.on("error", () => {});
+      });
+      assert.equal(result, status);
+      assert.equal(tasks.length, 1);
+      await tasks[0];
+      assert.equal(calls.leases.length, 0);
+    });
+  }
+});
+
+test("disconnect during authentication resolves without making a reservation", async t => {
+  const tasks = [];
+  const entered = deferred();
+  const auth = deferred();
+  const serverClosed = deferred();
+  let rawSocket;
+  const { server, address, calls } = await fixture(t, {
+    waitUntil: promise => tasks.push(promise),
+    store: { async authenticateDevice() {
+      entered.resolve(); await auth.promise;
+      return { id: deviceId, owner_id: ownerId, mac: "AA:BB:CC:DD:EE:FF" };
+    } },
+  });
+  server.once("upgrade", (_req, socket) => { rawSocket = socket; socket.once("close", serverClosed.resolve); });
+  const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: deviceHeaders });
+  ws.on("error", () => {});
+  await entered.promise;
+  const clientClosed = new Promise(resolve => ws.once("close", resolve));
+  rawSocket.destroy();
+  await serverClosed.promise;
+  await clientClosed;
+  auth.resolve();
+  await tasks[0];
+  assert.equal(calls.leases.length, 0);
+  assert.equal(calls.finished.length, 0);
+});
+
+test("disconnect during reservation refunds a lease that returns after close", async t => {
+  const tasks = [];
+  const entered = deferred();
+  const reservation = deferred();
+  const serverClosed = deferred();
+  let rawSocket;
+  const { server, address, calls } = await fixture(t, {
+    waitUntil: promise => tasks.push(promise),
+    store: { async reserveSession() {
+      entered.resolve(); await reservation.promise;
+      return { id: "late-lease", maxSeconds: 120 };
+    } },
+  });
+  server.once("upgrade", (_req, socket) => { rawSocket = socket; socket.once("close", serverClosed.resolve); });
+  const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: deviceHeaders });
+  ws.on("error", () => {});
+  await entered.promise;
+  const clientClosed = new Promise(resolve => ws.once("close", resolve));
+  rawSocket.destroy();
+  await serverClosed.promise;
+  await clientClosed;
+  let completed = false;
+  tasks[0].then(() => { completed = true; });
+  await nextTurn();
+  assert.equal(completed, false, "reservation is still in flight");
+  reservation.resolve();
+  await tasks[0];
+  assert.deepEqual(calls.finished, [{ id: "late-lease", elapsedSeconds: 0 }]);
+  assert.equal(calls.contexts, 0);
+  assert.equal(calls.voice, 0);
+});
+
+test("disconnect during context loading settles once without opening the provider", async t => {
+  const tasks = [];
+  const entered = deferred();
+  const context = deferred();
+  const serverClosed = deferred();
+  let rawSocket;
+  const { server, address, calls } = await fixture(t, {
+    waitUntil: promise => tasks.push(promise),
+    store: { async getVoiceContext() { entered.resolve(); return context.promise; } },
+  });
+  server.once("upgrade", (_req, socket) => { rawSocket = socket; socket.once("close", serverClosed.resolve); });
+  const ws = new WebSocket(address.replace("http:", "ws:") + "/ws/esp32", { headers: deviceHeaders });
+  ws.on("error", () => {});
+  await entered.promise;
+  const clientClosed = new Promise(resolve => ws.once("close", resolve));
+  rawSocket.destroy();
+  await serverClosed.promise;
+  await clientClosed;
+  context.resolve({ settings: {}, history: [] });
+  await tasks[0];
+  assert.deepEqual(calls.finished, [{ id: "lease-1", elapsedSeconds: 0 }]);
+  assert.equal(calls.voice, 0);
 });
 
 test("current Supabase publishable and secret variable names configure the private service", () => {

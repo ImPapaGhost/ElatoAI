@@ -93,17 +93,6 @@ export function createAppServer(options = {}) {
   const sessions = new Map();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
 
-  function background(promise) {
-    const task = Promise.resolve(promise);
-    // A WebSocket close can end the Vercel invocation before a final database
-    // write completes. Register those writes with the platform lifecycle.
-    if (options.waitUntil) {
-      try { options.waitUntil(task); }
-      catch { console.error("Could not register a voice background write."); }
-    }
-    return task;
-  }
-
   async function owner(req, res) {
     const jar = cookieJar(req);
     if (jar.cv_access) {
@@ -185,48 +174,92 @@ export function createAppServer(options = {}) {
   });
 
   server.on("upgrade", (req, socket, head) => {
+    // Register while Vercel's upgrade-request context is still active. The SDK
+    // silently does nothing when called later without that async context.
+    let resolveLifecycle;
+    const lifecycle = new Promise(resolve => { resolveLifecycle = resolve; });
+    if (options.waitUntil) {
+      try { options.waitUntil(lifecycle); }
+      catch { console.error("Could not register the voice request lifecycle."); }
+    }
+    const pending = new Set();
+    let setupInProgress = true;
+    let ended = false;
+    let lifecycleResolved = false;
+    function maybeResolveLifecycle() {
+      // Other listeners on the same close event can enqueue final transcripts.
+      // Check at the end of the turn, after those listeners have all run.
+      queueMicrotask(() => {
+        if (!lifecycleResolved && ended && !setupInProgress && pending.size === 0) {
+          lifecycleResolved = true;
+          resolveLifecycle();
+        }
+      });
+    }
+    function background(promise) {
+      const task = Promise.resolve(promise);
+      pending.add(task);
+      const complete = () => {
+        pending.delete(task);
+        maybeResolveLifecycle();
+      };
+      task.then(complete, complete);
+      return task;
+    }
     // Node may emit socket errors while authentication is awaiting Supabase.
     socket.on("error", () => {});
     let lease;
-    let settled = false;
+    let settlementStarted = false;
+    let settlementPromise;
+    let accepted = false;
     let startedAt;
     let authTimer;
-    async function finish({ elapsedSeconds = 0 } = {}) {
-      if (settled) return;
-      settled = true;
+    function finish({ elapsedSeconds = 0 } = {}) {
+      ended = true;
       clearInterval(authTimer);
-      if (lease) {
-        try { await background(store.finishSession(lease.id, elapsedSeconds)); }
-        catch { console.error("Voice allowance settlement failed; the reserved limit remains charged."); }
+      // A socket can disappear while reserveSession is awaiting the database.
+      // Do not mark a nonexistent lease settled: setup must settle it if that
+      // reservation returns after the close event.
+      if (lease && !settlementStarted) {
+        settlementStarted = true;
+        settlementPromise = background((async () => {
+          try { await store.finishSession(lease.id, elapsedSeconds); }
+          catch { console.error("Voice allowance settlement failed; the reserved limit remains charged."); }
+        })());
       }
+      maybeResolveLifecycle();
+      return settlementPromise || Promise.resolve();
     }
+    function reject(status) {
+      rejectUpgrade(socket, status);
+      return finish();
+    }
+    // Accepted WebSockets emit their own close event. This raw-socket fallback
+    // is for canceled authentication and rejected/malformed upgrade requests.
+    socket.once("close", () => { if (!accepted) void finish(); });
     (async () => {
-      if (route(req) !== "/ws/esp32") return rejectUpgrade(socket, 404);
-      if (!config.configured) return rejectUpgrade(socket, 503);
+      if (route(req) !== "/ws/esp32") return reject(404);
+      if (!config.configured) return reject(503);
       const auth = req.headers.authorization || "";
-      if (!/^Bearer [A-Za-z0-9_-]{43,128}$/.test(auth)) return rejectUpgrade(socket, 401);
+      if (!/^Bearer [A-Za-z0-9_-]{43,128}$/.test(auth)) return reject(401);
       const token = auth.slice(7);
       const mac = req.headers["x-device-mac"];
-      if (typeof mac !== "string" || !/^(?:[\da-f]{2}:){5}[\da-f]{2}$/i.test(mac)) return rejectUpgrade(socket, 401);
+      if (typeof mac !== "string" || !/^(?:[\da-f]{2}:){5}[\da-f]{2}$/i.test(mac)) return reject(401);
       const device = await store.authenticateDevice(token, mac);
-      if (socket.destroyed) return;
+      if (socket.destroyed) return finish();
       lease = await store.reserveSession(device);
-      // handleUpgrade may reject a malformed handshake by ending the raw
-      // socket without invoking its callback. Release that reservation too.
-      socket.once("close", () => {
-        void finish({ elapsedSeconds: startedAt ? Math.ceil((Date.now() - startedAt) / 1000) : 0 });
-      });
       if (socket.destroyed) return finish();
       const context = await store.getVoiceContext(device);
       if (socket.destroyed) return finish();
       wss.handleUpgrade(req, socket, head, ws => {
+        accepted = true;
         startedAt = Date.now();
         ws.on("error", () => {});
         ws.on("close", () => {
           sessions.delete(ws);
           void finish({ elapsedSeconds: Math.ceil((Date.now() - startedAt) / 1000) });
         });
-        void voiceFactory({
+        void background(Promise.resolve().then(() => voiceFactory({
           deviceSocket: ws,
           context,
           apiKey: config.geminiApiKey,
@@ -234,7 +267,7 @@ export function createAppServer(options = {}) {
           maxSeconds: Math.min(config.sessionSeconds, lease.maxSeconds),
           onTranscript: ({ role, content }) => background(store.appendTranscript(device.owner_id, device.id, role, content)),
           onEnd: finish,
-        }).then(controller => {
+        })).then(controller => {
           if (ws.readyState !== WebSocket.OPEN) return controller.close("device-disconnected");
           sessions.set(ws, { controller, deviceId: device.id });
           // Revocation applies across instances too, within one polling window.
@@ -245,11 +278,14 @@ export function createAppServer(options = {}) {
         }).catch(async () => {
           if (ws.readyState === WebSocket.OPEN) ws.close(1011, "Voice connection could not start");
           await finish({ elapsedSeconds: Math.ceil((Date.now() - startedAt) / 1000) });
-        });
+        }));
       });
     })().catch(async error => {
       await finish();
       rejectUpgrade(socket, error instanceof StoreError ? error.status : 503);
+    }).finally(() => {
+      setupInProgress = false;
+      maybeResolveLifecycle();
     });
   });
 
